@@ -1,9 +1,11 @@
 BINARY := bin/local-onvif-adapter
 WEB_DIR := web
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)
 
-.PHONY: setup build build-web build-go run test test-go lint up down logs ps clean version help
+.PHONY: setup build build-web build-go run test test-go lint release snapshot up down logs ps clean version help
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -34,6 +36,12 @@ test-web: ## 前端构建校验
 test: test-go ## 全量测试
 lint: ## go vet
 	go vet ./...
+
+release: ## 通过 goreleaser 发布（tag 触发，需 goreleaser 与 GITHUB_TOKEN）
+	goreleaser release --clean
+
+snapshot: ## 本地验证发布产物（不打 tag、不上传）
+	goreleaser build --snapshot --clean
 
 up: ## 一键启动（docker compose，host 网络 + mediamtx）
 	docker compose up -d --build

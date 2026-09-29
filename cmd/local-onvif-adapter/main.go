@@ -25,8 +25,12 @@ import (
 	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
 )
 
-// version 由构建注入（-ldflags）。
-var version = "dev"
+// version / commit / buildDate 由构建注入（-ldflags）。
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
 
 func main() {
 	var (
@@ -43,7 +47,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("local-onvif-adapter", version)
+		fmt.Printf("local-onvif-adapter %s (commit %s, built %s)\n", version, commit, buildDate)
 		return
 	}
 

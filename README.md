@@ -163,6 +163,21 @@ HTTP 端口被占用时（`EADDRINUSE`），启动会自动向后尝试下一个
 结果不写入配置：下次启动仍从配置端口开始探测，端口空闲时会回到首选端口。连续 20
 个端口都被占用时启动失败并报错；权限不足等其它绑定错误不做漂移。
 
+## 发布
+
+发布通过 GitHub Release 驱动：
+
+1. 打 tag 并推送：`git tag v0.1.0 && git push origin v0.1.0`
+2. 在 GitHub [Releases](https://github.com/LinuxSuRen/local-onvif-adapter/releases) 页面基于该
+   tag 创建并发布 Release（`release` workflow 自动触发）
+3. workflow 自动完成：构建前端 → 六平台交叉编译（linux/darwin/windows × amd64/arm64）→
+   打包 tar.gz / zip（含 LICENSE、README）→ 生成 `checksums.txt` → 上传到该 Release
+4. 产物缺失时可在 Actions 页面手动 `workflow_dispatch` 指定 tag 补传（`--clobber` 覆盖）
+
+本地验证发布配置：`make snapshot`（需要 [goreleaser](https://goreleaser.com)，不打
+tag、不上传）；正式本地发布用 `make release`。推送到 master / PR 会触发 `build`
+workflow 跑 `go vet` + `go test -race`（CI 会先构建前端再测试）。
+
 ## 依赖
 
 - Go 1.24+、Node 20+（构建前端）
