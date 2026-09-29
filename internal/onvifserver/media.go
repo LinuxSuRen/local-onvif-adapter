@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
 )
 
 // registerMediaOps 注册 Media Service (trt) 操作。

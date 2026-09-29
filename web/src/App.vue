@@ -68,7 +68,7 @@ async function handleRemove(camera) {
 <template>
   <div class="page">
     <header class="page-header">
-      <h1>onvif-local 管理台</h1>
+      <h1>local-onvif-adapter 管理台</h1>
       <p>将本地摄像头通过 ONVIF 协议暴露给客户端</p>
     </header>
 

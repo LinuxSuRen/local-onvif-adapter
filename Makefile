@@ -1,4 +1,4 @@
-BINARY := bin/onvif-local
+BINARY := bin/local-onvif-adapter
 WEB_DIR := web
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
@@ -18,7 +18,7 @@ build-web: ## 构建前端（产物 web/dist）
 	cd $(WEB_DIR) && npm run build
 
 build-go: ## 编译后端单二进制（内嵌前端）
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/onvif-local
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/local-onvif-adapter
 
 build: build-web build-go ## 构建前端 + 后端
 

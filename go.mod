@@ -1,4 +1,4 @@
-module github.com/linuxsuren/onvif-local
+module github.com/linuxsuren/local-onvif-adapter
 
 go 1.24
 

@@ -94,7 +94,7 @@ func Default() *Root {
 			Discovery:    true,
 		},
 		Manufacturer: "linuxsuren",
-		Model:        "onvif-local",
+		Model:        "local-onvif-adapter",
 		Firmware:     "0.1.0",
 		NextID:       1,
 		Cameras:      []Camera{},

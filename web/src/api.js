@@ -1,4 +1,4 @@
-// onvif-local 管理台 HTTP 封装：统一处理 envelope、超时与友好错误提示
+// local-onvif-adapter 管理台 HTTP 封装：统一处理 envelope、超时与友好错误提示
 const TIMEOUT_MS = 15000
 
 export class ApiError extends Error {

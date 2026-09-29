@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/onvifserver"
-	"github.com/linuxsuren/onvif-local/internal/ptzmock"
-	"github.com/linuxsuren/onvif-local/internal/snapshot"
-	"github.com/linuxsuren/onvif-local/internal/stream"
-	"github.com/linuxsuren/onvif-local/web"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
+	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/snapshot"
+	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
+	"github.com/linuxsuren/local-onvif-adapter/web"
 )
 
 // Server 聚合管理面的全部依赖。

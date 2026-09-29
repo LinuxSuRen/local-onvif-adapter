@@ -1,19 +1,19 @@
 services:
   mediamtx:
     image: bluenviron/mediamtx:latest
-    container_name: onvif-local-mediamtx
+    container_name: local-onvif-adapter-mediamtx
     network_mode: host
     restart: unless-stopped
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
 
-  onvif-local:
+  local-onvif-adapter:
     build:
       context: .
       args:
         VERSION: ${VERSION:-dev}
-    image: onvif-local:latest
-    container_name: onvif-local
+    image: local-onvif-adapter:latest
+    container_name: local-onvif-adapter
     network_mode: host
     restart: unless-stopped
     command:

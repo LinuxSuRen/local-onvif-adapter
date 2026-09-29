@@ -18,7 +18,7 @@ func registerDeviceOps() {
 	reg(nsDevice, "GetDeviceInformation", opGetDeviceInformation)
 	reg(nsDevice, "GetSystemDateAndTime", opGetSystemDateAndTime)
 	reg(nsDevice, "GetHostname", func(s *Service, _ []byte) (string, error) {
-		return `<tds:GetHostnameResponse><tt:Hostname>onvif-local.local</tt:Hostname></tds:GetHostnameResponse>`, nil
+		return `<tds:GetHostnameResponse><tt:Hostname>local-onvif-adapter.local</tt:Hostname></tds:GetHostnameResponse>`, nil
 	})
 	reg(nsDevice, "GetScopes", opGetScopes)
 	reg(nsDevice, "GetNetworkInterfaces", func(s *Service, _ []byte) (string, error) {
@@ -85,7 +85,7 @@ func opGetDeviceInformation(s *Service, _ []byte) (string, error) {
 		`<tds:Model>` + xmlEsc(root.Model) + `</tds:Model>` +
 		`<tds:FirmwareVersion>` + xmlEsc(root.Firmware) + `</tds:FirmwareVersion>` +
 		`<tds:SerialNumber>` + xmlEsc(root.Serial) + `</tds:SerialNumber>` +
-		`<tds:HardwareId>onvif-local-v1</tds:HardwareId>` +
+		`<tds:HardwareId>local-onvif-adapter-v1</tds:HardwareId>` +
 		`</tds:GetDeviceInformationResponse>`
 	return body, nil
 }

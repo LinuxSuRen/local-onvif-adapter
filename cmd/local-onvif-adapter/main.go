@@ -1,4 +1,4 @@
-// onvif-local 把本地摄像头（USB / macOS / RTSP / 测试源）暴露为标准 ONVIF 设备：
+// local-onvif-adapter 把本地摄像头（USB / macOS / RTSP / 测试源）暴露为标准 ONVIF 设备：
 // 单设备多 profile（双光云台模式），PTZ 纯 mock，配套 Web 管理台。
 package main
 
@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/linuxsuren/onvif-local/internal/api"
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/discovery"
-	"github.com/linuxsuren/onvif-local/internal/onvifserver"
-	"github.com/linuxsuren/onvif-local/internal/ptzmock"
-	"github.com/linuxsuren/onvif-local/internal/snapshot"
-	"github.com/linuxsuren/onvif-local/internal/stream"
+	"github.com/linuxsuren/local-onvif-adapter/internal/api"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/discovery"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
+	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/snapshot"
+	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
 )
 
 // version 由构建注入（-ldflags）。
@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("onvif-local", version)
+		fmt.Println("local-onvif-adapter", version)
 		return
 	}
 
@@ -129,7 +129,7 @@ func main() {
 			"onvif://www.onvif.org/Profile/Streaming",
 			"onvif://www.onvif.org/name/" + root.Model,
 		}
-		responder := discovery.New("urn:uuid:onvif-local-"+root.Serial, uris.XAddr(), scopes, logger)
+		responder := discovery.New("urn:uuid:local-onvif-adapter-"+root.Serial, uris.XAddr(), scopes, logger)
 		go responder.Run(ctx)
 	} else {
 		logger.Info("ws-discovery disabled")

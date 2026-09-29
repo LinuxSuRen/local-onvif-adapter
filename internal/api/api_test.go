@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/onvifserver"
-	"github.com/linuxsuren/onvif-local/internal/ptzmock"
-	"github.com/linuxsuren/onvif-local/internal/snapshot"
-	"github.com/linuxsuren/onvif-local/internal/stream"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
+	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/snapshot"
+	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
 )
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
@@ -228,7 +228,7 @@ func TestUIStaticServed(t *testing.T) {
 		t.Fatalf("ui status: %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !bytes.Contains(body, []byte("onvif-local")) && !bytes.Contains(body, []byte("<!doctype html")) {
+	if !bytes.Contains(body, []byte("local-onvif-adapter")) && !bytes.Contains(body, []byte("<!doctype html")) {
 		t.Fatalf("unexpected ui content: %s", string(body[:min(200, len(body))]))
 	}
 }

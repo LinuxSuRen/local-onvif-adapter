@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
 )
 
 // Status 单个摄像头取流进程的运行状态。

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/stream"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
 )
 
 const (

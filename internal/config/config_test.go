@@ -13,7 +13,7 @@ func TestLoadStoreCreatesDefault(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	root := s.Root()
-	if root.Model != "onvif-local" || root.Serial == "" || root.Server.HTTPAddr != ":8080" {
+	if root.Model != "local-onvif-adapter" || root.Serial == "" || root.Server.HTTPAddr != ":8080" {
 		t.Fatalf("default root: %+v", root)
 	}
 	// 文件已落盘。

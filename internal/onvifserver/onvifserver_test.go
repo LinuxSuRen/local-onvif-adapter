@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
 )
 
 // ---- 测试脚手架 ----
@@ -219,7 +219,7 @@ func TestGetDeviceInformation(t *testing.T) {
 	if err := xml.Unmarshal([]byte(callOp(t, s, "tds", "GetDeviceInformation", "")), &resp); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if resp.Manufacturer == "" || resp.Model != "onvif-local" || resp.SerialNumber == "" {
+	if resp.Manufacturer == "" || resp.Model != "local-onvif-adapter" || resp.SerialNumber == "" {
 		t.Fatalf("unexpected device info: %+v", resp)
 	}
 }

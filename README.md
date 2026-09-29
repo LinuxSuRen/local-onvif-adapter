@@ -1,4 +1,4 @@
-# onvif-local
+# local-onvif-adapter
 
 把本地摄像头暴露为标准 ONVIF 设备。
 
@@ -17,7 +17,7 @@
 ┌──────────────────────────── host (Linux/macOS) ────────────────────────────┐
 │                                                                             │
 │  ┌───────────────────────────┐  RTSP push  ┌─────────────┐                 │
-│  │ onvif-local (Go)          │ ──────────▶ │ mediamtx    │                 │
+│  │ local-onvif-adapter (Go)          │ ──────────▶ │ mediamtx    │                 │
 │  │  :8080 HTTP               │             │  :8554 RTSP │◀── ONVIF 客户端 │
 │  │   ├ /            管理 UI  │  ffmpeg 按需抓帧 → JPEG      拉流            │
 │  │   ├ /api/...     REST API │                                             │
@@ -117,7 +117,7 @@ go run ./cmd/device-camera-onvif --rtsp-forward-enabled=false
 调用 gRPC 接口时在 `DeviceConnection.endpoint`（或 `x-onvif-endpoint` metadata）传入：
 
 ```
-http://<onvif-local 所在机器IP>:8080/onvif/device_service
+http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 ```
 
 用户名/密码任意（服务端不校验）。抓拍、取流、PTZ、预置位、分辨率调整即可直接使用；
@@ -126,7 +126,7 @@ http://<onvif-local 所在机器IP>:8080/onvif/device_service
 ## 目录结构
 
 ```
-├── cmd/onvif-local/          # 服务入口（flag/env 装配）
+├── cmd/local-onvif-adapter/          # 服务入口（flag/env 装配）
 ├── internal/
 │   ├── api/                  # 管理 REST API + 静态 UI 托管 + 快照路由
 │   ├── config/               # 配置与摄像头列表持久化（data/config.json）
@@ -137,7 +137,7 @@ http://<onvif-local 所在机器IP>:8080/onvif/device_service
 │   └── stream/               # ffmpeg 取流进程监督（退避重启）
 ├── web/                      # Vue3 管理台（构建产物内嵌）
 ├── Dockerfile                # 多阶段：node 构建前端 → go 构建后端 → alpine+ffmpeg
-├── docker-compose.yml        # onvif-local + mediamtx（host 网络）
+├── docker-compose.yml        # local-onvif-adapter + mediamtx（host 网络）
 ├── mediamtx.yml              # mediamtx 最小配置（仅 RTSP 8554）
 └── Makefile
 ```

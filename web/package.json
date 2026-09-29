@@ -1,5 +1,5 @@
 {
-  "name": "onvif-local-web",
+  "name": "local-onvif-adapter-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",

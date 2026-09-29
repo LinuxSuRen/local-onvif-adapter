@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/linuxsuren/onvif-local/internal/config"
-	"github.com/linuxsuren/onvif-local/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
 )
 
 // URIs 计算对外宣告的各类地址。

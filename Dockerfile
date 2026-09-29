@@ -16,13 +16,13 @@ COPY internal/ internal/
 COPY web/embed.go web/embed.go
 COPY --from=web /src/web/dist web/dist/
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/onvif-local ./cmd/onvif-local
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/local-onvif-adapter ./cmd/local-onvif-adapter
 
 # ---- 运行镜像 ----
 FROM alpine:3.20
 RUN apk add --no-cache ffmpeg ca-certificates tzdata
-COPY --from=build /out/onvif-local /usr/local/bin/onvif-local
+COPY --from=build /out/local-onvif-adapter /usr/local/bin/local-onvif-adapter
 ENV DATA_DIR=/data
 VOLUME /data
 EXPOSE 8080 8554
-ENTRYPOINT ["onvif-local"]
+ENTRYPOINT ["local-onvif-adapter"]
