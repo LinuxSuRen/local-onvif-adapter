@@ -1,0 +1,14 @@
+# mediamtx 最小配置：仅启用 RTSP（8554），关闭其余协议端口，
+# 避免与宿主机已有服务在 host 网络模式下冲突。
+logLevel: warn
+rtsp: yes
+rtspAddress: :8554
+protocols: [udp, tcp]
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+api: no
+metrics: no
+pprof: no
+playback: no

@@ -1,0 +1,28 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: onvif-local-mediamtx
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+
+  onvif-local:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: onvif-local:latest
+    container_name: onvif-local
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - --data-dir=/data
+      - --rtsp-push=rtsp://127.0.0.1:8554
+    volumes:
+      - ./data:/data
+      # Linux 下接入本地 USB 摄像头（按需取消注释，可映射多个）：
+      # - /dev/video0:/dev/video0
+      # - /dev/video1:/dev/video1
+    depends_on:
+      - mediamtx
