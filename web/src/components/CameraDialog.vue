@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createCamera, updateCamera, listDShowDevices } from '../api'
+import { createCamera, updateCamera, listDevices } from '../api'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -19,7 +19,7 @@ const saving = ref(false)
 
 const DEFAULT_FORM = {
   name: '',
-  type: 'v4l2',
+  type: '',
   source: '',
   width: 0,
   height: 0,
@@ -31,64 +31,87 @@ const DEFAULT_FORM = {
 
 const form = reactive({ ...DEFAULT_FORM })
 
-const TYPE_OPTIONS = [
-  { value: 'v4l2', label: 'v4l2 设备' },
-  { value: 'avfoundation', label: 'macOS 摄像头' },
-  { value: 'dshow', label: 'Windows 摄像头' },
-  { value: 'rtsp', label: 'RTSP 拉流' },
+// 用户只选择"来源方式"，平台差异（v4l2/avfoundation/dshow）由设备枚举结果自动携带。
+const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow']
+const MODE_OPTIONS = [
+  { value: 'local', label: '本地摄像头' },
+  { value: 'rtsp', label: '网络摄像头（RTSP）' },
   { value: 'testsrc', label: '测试彩条' }
 ]
+const mode = ref('local')
 
-const SOURCE_PLACEHOLDER = {
-  v4l2: '/dev/video0',
-  avfoundation: '0（设备索引）',
-  dshow: '设备名（如 Integrated Camera）',
-  rtsp: 'rtsp://user:pass@ip:554/stream',
-  testsrc: '留空即可，生成 1280×720 彩条'
-}
+// 本地设备枚举。
+const devices = ref([])
+const devicesLoading = ref(false)
+const devicesEnumFailed = ref(false)
+const defaultLocalType = ref('')
+let devicesLoaded = false
 
-const isTestSrc = computed(() => form.type === 'testsrc')
-const isDShow = computed(() => form.type === 'dshow')
-
-// Windows 设备枚举：可选下拉，失败时回退为手填。
-const dshowDevices = ref([])
-const dshowLoading = ref(false)
-const dshowEnumFailed = ref(false)
-let dshowLoaded = false
-
-async function loadDShowDevices(showToast = false) {
-  dshowLoading.value = true
+async function loadDevices(showToast = false) {
+  devicesLoading.value = true
   try {
-    const devices = await listDShowDevices()
-    dshowDevices.value = Array.isArray(devices) ? devices : []
-    dshowEnumFailed.value = false
+    const result = await listDevices()
+    devices.value = Array.isArray(result && result.devices) ? result.devices : []
+    defaultLocalType.value = (result && result.default_type) || ''
+    devicesEnumFailed.value = false
   } catch (e) {
-    dshowDevices.value = []
-    dshowEnumFailed.value = true
+    devices.value = []
+    devicesEnumFailed.value = true
     if (showToast) ElMessage.warning(e.message)
   } finally {
-    dshowLoading.value = false
-    dshowLoaded = true
+    devicesLoading.value = false
+    devicesLoaded = true
   }
 }
 
 watch(
-  () => [props.visible, form.type],
-  ([visible, type]) => {
-    if (visible && type === 'dshow' && !dshowLoaded) {
-      loadDShowDevices()
+  () => [props.visible, mode.value],
+  ([visible, m]) => {
+    if (visible && m === 'local' && !devicesLoaded) {
+      loadDevices()
     }
   }
 )
+
+function kindLabel(kind) {
+  if (kind === 'builtin') return '内置'
+  if (kind === 'usb') return 'USB'
+  return ''
+}
+
+function deviceLabel(d) {
+  const k = kindLabel(d.kind)
+  return k ? `${d.name}（${k}）` : d.name
+}
+
+// 选择本地设备：类型随设备携带。
+function onDeviceChange(source) {
+  const dev = devices.value.find((d) => d.source === source)
+  form.type = dev ? dev.type : defaultLocalType.value
+}
+
+watch(mode, (m) => {
+  if (m === 'rtsp') form.type = 'rtsp'
+  if (m === 'testsrc') form.type = 'testsrc'
+  if (m === 'local' && !form.type) form.type = defaultLocalType.value
+  nextTick(() => formRef.value && formRef.value.clearValidate('source'))
+})
+
+const SOURCE_PLACEHOLDER = {
+  rtsp: 'rtsp://user:pass@ip:554/stream',
+  testsrc: '留空即可，生成 1280×720 彩条'
+}
 
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   source: [
     {
       validator: (rule, value, callback) => {
-        if (form.type === 'testsrc') return callback()
-        if (!value || !String(value).trim()) return callback(new Error('请输入源'))
-        if (form.type === 'rtsp' && !String(value).trim().startsWith('rtsp://')) {
+        if (mode.value === 'testsrc') return callback()
+        if (!value || !String(value).trim()) {
+          return callback(new Error(mode.value === 'local' ? '请选择摄像头设备' : '请输入源'))
+        }
+        if (mode.value === 'rtsp' && !String(value).trim().startsWith('rtsp://')) {
           return callback(new Error('RTSP 源必须以 rtsp:// 开头'))
         }
         callback()
@@ -106,7 +129,7 @@ watch(
     if (c) {
       Object.assign(form, DEFAULT_FORM, {
         name: c.name != null ? c.name : '',
-        type: c.type != null ? c.type : 'v4l2',
+        type: c.type != null ? c.type : '',
         source: c.source != null ? c.source : '',
         width: c.width != null ? c.width : 0,
         height: c.height != null ? c.height : 0,
@@ -115,17 +138,13 @@ watch(
         infrared: !!c.infrared,
         enabled: !!c.enabled
       })
+      mode.value = LOCAL_TYPES.includes(c.type) ? 'local' : c.type || 'local'
     } else {
       Object.assign(form, DEFAULT_FORM)
+      mode.value = 'local'
+      form.type = defaultLocalType.value
     }
     nextTick(() => formRef.value && formRef.value.clearValidate())
-  }
-)
-
-watch(
-  () => form.type,
-  () => {
-    nextTick(() => formRef.value && formRef.value.clearValidate('source'))
   }
 )
 
@@ -135,11 +154,19 @@ async function handleSave() {
   } catch (e) {
     return
   }
+  // 兜底：本地模式下类型始终跟随设备或平台默认值。
+  let type = form.type
+  if (mode.value === 'local') {
+    const dev = devices.value.find((d) => d.source === form.source)
+    type = dev ? dev.type : defaultLocalType.value
+  } else {
+    type = mode.value
+  }
   saving.value = true
   const body = {
     name: form.name.trim(),
-    type: form.type,
-    source: form.type === 'testsrc' ? '' : form.source.trim(),
+    type,
+    source: mode.value === 'testsrc' ? '' : form.source.trim(),
     width: form.width,
     height: form.height,
     framerate: form.framerate,
@@ -170,44 +197,43 @@ async function handleSave() {
       <el-form-item label="名称" prop="name">
         <el-input v-model="form.name" placeholder="请输入名称" />
       </el-form-item>
-      <el-form-item label="类型" prop="type">
-        <el-select v-model="form.type" class="full-width">
-          <el-option v-for="t in TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
-        </el-select>
+      <el-form-item label="来源方式">
+        <el-radio-group v-model="mode">
+          <el-radio-button v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">
+            {{ m.label }}
+          </el-radio-button>
+        </el-radio-group>
       </el-form-item>
-      <el-form-item label="源" prop="source">
-        <template v-if="isDShow && !dshowEnumFailed && dshowDevices.length">
-          <div class="num-row">
-            <el-select
-              v-model="form.source"
-              class="full-width"
-              filterable
-              allow-create
-              default-first-option
-              :loading="dshowLoading"
-              placeholder="选择设备，或直接输入设备名"
-            >
-              <el-option v-for="d in dshowDevices" :key="d" :label="d" :value="d" />
-            </el-select>
-            <el-button
-              class="enum-refresh"
-              :loading="dshowLoading"
-              @click="loadDShowDevices(true)"
-            >刷新</el-button>
-          </div>
-        </template>
-        <template v-else>
-          <el-input
+      <el-form-item v-if="mode === 'local'" label="摄像头" prop="source">
+        <div class="num-row">
+          <el-select
             v-model="form.source"
-            :disabled="isTestSrc"
-            :placeholder="SOURCE_PLACEHOLDER[form.type]"
-          />
-          <div v-if="isDShow" class="form-tip">
-            {{ dshowEnumFailed
-              ? '设备枚举不可用（仅 Windows 支持枚举），请手动填设备名；可用 ffmpeg -list_devices true -f dshow -i dummy 查询'
-              : '未枚举到设备，请确认摄像头已连接后点刷新，或直接输入设备名' }}
-          </div>
-        </template>
+            class="full-width"
+            filterable
+            allow-create
+            default-first-option
+            :loading="devicesLoading"
+            placeholder="选择检测到的摄像头，或直接输入设备源"
+            @change="onDeviceChange"
+          >
+            <el-option v-for="d in devices" :key="d.source" :label="deviceLabel(d)" :value="d.source" />
+          </el-select>
+          <el-button class="enum-refresh" :loading="devicesLoading" @click="loadDevices(true)">刷新</el-button>
+        </div>
+        <div class="form-tip">
+          {{ devicesEnumFailed
+            ? '设备枚举不可用，请确认 ffmpeg 已安装；也可手动输入设备源'
+            : devices.length === 0 && !devicesLoading
+              ? '未检测到本地摄像头，接入后点刷新；也可手动输入设备源'
+              : '列表为当前主机检测到的内置与 USB 摄像头' }}
+        </div>
+      </el-form-item>
+      <el-form-item v-else label="源" prop="source">
+        <el-input
+          v-model="form.source"
+          :disabled="mode === 'testsrc'"
+          :placeholder="SOURCE_PLACEHOLDER[mode]"
+        />
       </el-form-item>
       <el-form-item label="分辨率">
         <div class="num-row">
