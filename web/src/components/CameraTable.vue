@@ -68,6 +68,24 @@ async function onToggleEnabled(row, value) {
     delete toggling[row.id]
   }
 }
+
+function rtspURL(row) {
+  return (row.status && row.status.restream_url) || ''
+}
+
+async function copyRTSP(row) {
+  const url = rtspURL(row)
+  if (!url) {
+    ElMessage.warning('摄像头未启用，暂无 RTSP 地址')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(url)
+    ElMessage.success(`已复制 ${url}`)
+  } catch {
+    ElMessage.error('复制失败，请手动复制：' + url)
+  }
+}
 </script>
 
 <template>
@@ -129,8 +147,16 @@ async function onToggleEnabled(row, value) {
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
+          <el-tooltip
+            :content="rtspURL(row) || '摄像头未启用，暂无 RTSP 地址'"
+            placement="top"
+          >
+            <el-button link type="primary" :disabled="!rtspURL(row)" @click="copyRTSP(row)">
+              <el-icon><Link /></el-icon>RTSP
+            </el-button>
+          </el-tooltip>
           <el-button link type="primary" @click="emit('snapshot', row)">
             <el-icon><Camera /></el-icon>快照
           </el-button>
