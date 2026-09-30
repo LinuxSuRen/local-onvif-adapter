@@ -245,6 +245,26 @@ func TestListDevicesEndpoint(t *testing.T) {
 	}
 }
 
+func TestSnapshotPrefersStreamAndFallsBack(t *testing.T) {
+	srv, ts := newTestServer(t)
+	// RTSP 基址指向不可达端口：流抓帧失败应回退直连（直连 ffmpeg 为 false 也失败）→ 502。
+	srv.RTSPBaseURL = "rtsp://127.0.0.1:1"
+	doJSON(t, "POST", ts.URL+"/api/cameras", `{"name":"t","type":"testsrc","enabled":true}`)
+	resp, err := http.Get(ts.URL + "/api/cameras/cam1/snapshot")
+	if err != nil {
+		t.Fatalf("get snapshot: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("want 502 when both paths fail, got %d", resp.StatusCode)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["error"].(map[string]any)["code"] != "snapshot_failed" {
+		t.Fatalf("error envelope: %v", out)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	_, ts := newTestServer(t)
 	code, out := doJSON(t, "GET", ts.URL+"/healthz", "")

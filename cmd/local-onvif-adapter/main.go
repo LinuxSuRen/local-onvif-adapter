@@ -134,6 +134,8 @@ func main() {
 	}
 
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
+	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
+	apiSrv.RTSPBaseURL = pushAddr
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。
