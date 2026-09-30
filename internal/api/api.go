@@ -30,6 +30,10 @@ type Server struct {
 	onvif   *onvifserver.Service
 	version string
 	logger  *slog.Logger
+
+	// RTSPBaseURL 是取流服务基址（如 rtsp://127.0.0.1:8554），
+	// 启用中的摄像头优先从该服务的流抓帧（设备独占问题，见 captureSnapshot）。
+	RTSPBaseURL string
 }
 
 // NewServer 创建管理服务。
@@ -386,8 +390,25 @@ func (s *Server) handleOnvifSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "profile 不存在或未启用")
 }
 
+// captureSnapshot 抓取一帧 JPEG：
+// 启用中的摄像头优先从取流服务拉帧 —— Windows(dshow)/Linux(v4l2) 的采集设备
+// 通常只能被一个进程打开，取流进程持有设备时无法再开第二个 ffmpeg 直连采集；
+// 拉流失败（如进程尚未就绪）再回退直连，禁用的摄像头直接直连。
+func (s *Server) captureSnapshot(cam config.Camera) ([]byte, error) {
+	if cam.Enabled && s.RTSPBaseURL != "" {
+		url := strings.TrimSuffix(s.RTSPBaseURL, "/") + "/cam/" + cam.ID
+		data, err := s.snaps.JPEGFromStream(cam.ID, url)
+		if err == nil {
+			return data, nil
+		}
+		s.logger.Warn("snapshot from stream failed, fallback to direct capture",
+			"camera", cam.ID, "err", err.Error())
+	}
+	return s.snaps.JPEG(cam)
+}
+
 func (s *Server) writeSnapshot(w http.ResponseWriter, _ *http.Request, cam config.Camera) {
-	data, err := s.snaps.JPEG(cam)
+	data, err := s.captureSnapshot(cam)
 	if err != nil {
 		s.logger.Warn("snapshot failed", "camera", cam.ID, "err", err.Error())
 		writeError(w, http.StatusBadGateway, "snapshot_failed",

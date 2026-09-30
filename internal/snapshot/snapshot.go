@@ -1,4 +1,8 @@
 // Package snapshot 用 ffmpeg 按需抓取摄像头单帧 JPEG，并做短时缓存。
+// 两种取帧方式：
+//   - JPEGFromStream：从取流服务的 RTSP 地址拉帧（摄像头启用时优先，
+//     避免二次独占打开设备 —— Windows dshow / Linux v4l2 均为独占）。
+//   - JPEG：直接从设备采集（摄像头禁用、无取流进程时使用）。
 package snapshot
 
 import (
@@ -42,34 +46,46 @@ func New(bin string, logger *slog.Logger) *Generator {
 	return &Generator{bin: bin, ttl: defaultTTL, logger: logger, cache: map[string]cacheEntry{}}
 }
 
-// JPEG 抓取一帧 JPEG。命中缓存且未过期时直接返回。
+// JPEG 直接从摄像头设备抓取一帧 JPEG。命中缓存且未过期时直接返回。
 func (g *Generator) JPEG(cam config.Camera) ([]byte, error) {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	args = append(args, stream.InputArgs(cam)...)
+	args = append(args, "-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1")
+	return g.captured(cam.ID, args)
+}
+
+// JPEGFromStream 从 RTSP 取流地址拉取一帧 JPEG（与 JPEG 共享同一缓存键）。
+func (g *Generator) JPEGFromStream(camID, rtspURL string) ([]byte, error) {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-rtsp_transport", "tcp", "-i", rtspURL,
+		"-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1"}
+	return g.captured(camID, args)
+}
+
+// captured 执行抓帧命令并写缓存。
+func (g *Generator) captured(key string, args []string) ([]byte, error) {
 	g.mu.Lock()
-	if e, ok := g.cache[cam.ID]; ok && time.Since(e.at) < g.ttl {
+	if e, ok := g.cache[key]; ok && time.Since(e.at) < g.ttl {
 		g.mu.Unlock()
 		return e.data, nil
 	}
 	g.mu.Unlock()
 
-	data, err := g.capture(cam)
+	data, err := g.run(args)
 	if err != nil {
 		return nil, err
 	}
 	g.mu.Lock()
-	g.cache[cam.ID] = cacheEntry{data: data, at: time.Now()}
+	g.cache[key] = cacheEntry{data: data, at: time.Now()}
 	g.mu.Unlock()
 	return data, nil
 }
 
-func (g *Generator) capture(cam config.Camera) ([]byte, error) {
+func (g *Generator) run(args []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
-	args = append(args, stream.InputArgs(cam)...)
-	args = append(args, "-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1")
-
-	g.logger.Debug("snapshot capturing", "camera", cam.ID, "args", args)
+	g.logger.Debug("snapshot capturing", "args", args)
 	cmd := exec.CommandContext(ctx, g.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
