@@ -168,15 +168,20 @@ func parseAVFDevices(stderr string) []Device {
 			continue
 		}
 		if m := avfDeviceRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			name := m[2]
+			// 新版 FFmpeg 在设备名后追加了 [uid:...] [serial:...] 信息，剥离。
+			if idx := strings.Index(name, " [uid:"); idx >= 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
 			// 屏幕采集（Capture screen N）不是摄像头，过滤。
-			if strings.HasPrefix(m[2], "Capture screen") {
+			if strings.HasPrefix(name, "Capture screen") {
 				continue
 			}
 			devices = append(devices, Device{
-				Name:   m[2],
+				Name:   name,
 				Source: m[1],
 				Type:   string(config.TypeAVFoundation),
-				Kind:   guessKind(m[2]),
+				Kind:   guessKind(name),
 			})
 		}
 	}
@@ -197,30 +202,65 @@ func listDShowDevices(ffmpegBin string) ([]Device, error) {
 	return parseDShowDevices(stderr), nil
 }
 
-// parseDShowDevices 解析 dshow 设备列表的 stderr 输出。
+// dshowMediaTypeRe 匹配新格式（FFmpeg 7.1+ 统一设备列表）行尾的媒体类型括号组，
+// 如 (video)、(video, audio)、(audio)、(none)。限定小写媒体类型词，
+// 避免把设备名中普通的括号后缀（如 "Camera (Front)"）误判为媒体类型。
+var dshowMediaTypeRe = regexp.MustCompile(`\((?:video|audio|none)(?:, (?:video|audio|none))*\)$`)
+
+// parseDShowDevices 解析 dshow 设备列表的 stderr 输出，兼容两种格式：
+//   - 旧版（约 ≤7.0）：以 "DirectShow video devices" / "DirectShow audio devices"
+//     分节，设备行形如 `"Integrated Camera"`（无媒体类型后缀）。
+//   - 新版（7.1+ 统一设备列表）：无分节标题，每个设备一行，形如
+//     `"WL24A" (video)`（纯音频为 `(audio)`，音视频合并为 `(video, audio)`），
+//     每个设备后跟一行 `Alternative name "..."`（含 PnP 路径，可识别 USB 连接）。
 func parseDShowDevices(stderr string) []Device {
 	var devices []Device
 	section := ""
+	pending := -1 // 紧邻上一行的视频设备在 devices 中的下标（用于回填 Alternative name 信息）
 	for _, line := range strings.Split(stderr, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Alternative name 行两种格式都有且含引号，先处理再跳过，防止被设备名正则误匹配。
+		if strings.Contains(line, "Alternative name") {
+			if pending >= 0 && strings.Contains(trimmed, "usb#") {
+				devices[pending].Kind = kindUSB
+			}
+			pending = -1
+			continue
+		}
 		switch {
 		case strings.Contains(line, "DirectShow video devices"):
 			section = "video"
+			pending = -1
 			continue
 		case strings.Contains(line, "DirectShow audio devices"):
 			section = "audio"
+			pending = -1
 			continue
 		}
-		if section != "video" || strings.Contains(line, "Alternative name") {
+		m := quotedNameRe.FindStringSubmatch(line)
+		if m == nil {
+			pending = -1
 			continue
 		}
-		if m := quotedNameRe.FindStringSubmatch(line); m != nil {
-			devices = append(devices, Device{
-				Name:   m[1],
-				Source: m[1],
-				Type:   string(config.TypeDShow),
-				Kind:   guessKind(m[1]),
-			})
+		keep := false
+		if media := dshowMediaTypeRe.FindString(trimmed); media != "" {
+			// 新格式：按行尾媒体类型判断，纯音频/无媒体跳过。
+			keep = strings.Contains(media, "video")
+		} else {
+			// 旧格式：依赖分节标题。
+			keep = section == "video"
 		}
+		if !keep {
+			pending = -1
+			continue
+		}
+		devices = append(devices, Device{
+			Name:   m[1],
+			Source: m[1],
+			Type:   string(config.TypeDShow),
+			Kind:   guessKind(m[1]),
+		})
+		pending = len(devices) - 1
 	}
 	return devices
 }
