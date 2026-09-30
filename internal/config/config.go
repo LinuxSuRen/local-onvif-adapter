@@ -65,8 +65,9 @@ func (c Camera) BitrateOrDefault() int {
 type Server struct {
 	HTTPAddr     string `json:"http_addr"`      // HTTP 监听地址，默认 :8080
 	AdvertiseIP  string `json:"advertise_ip"`   // 对外宣告 IP，空则自动探测
-	RTSPPushAddr string `json:"rtsp_push_addr"` // ffmpeg 推流目标，如 rtsp://127.0.0.1:8554
-	RTSPPort     int    `json:"rtsp_port"`      // 对外宣告的 RTSP 端口
+	RTSPPushAddr string `json:"rtsp_push_addr"` // ffmpeg 推流目标（仅外部 mediamtx 模式使用）
+	RTSPPort     int    `json:"rtsp_port"`      // RTSP 端口：内嵌服务器监听端口 + 对外宣告端口
+	RTSPEmbedded bool   `json:"rtsp_embedded"`  // 是否启用内嵌 RTSP 服务器（默认 true）
 	FFmpegBin    string `json:"ffmpeg_bin"`
 	Discovery    bool   `json:"discovery"` // 是否开启 WS-Discovery
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/linuxsuren/local-onvif-adapter/internal/discovery"
 	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
 	"github.com/linuxsuren/local-onvif-adapter/internal/ptzmock"
+	"github.com/linuxsuren/local-onvif-adapter/internal/rtspserver"
 	"github.com/linuxsuren/local-onvif-adapter/internal/snapshot"
 	"github.com/linuxsuren/local-onvif-adapter/internal/stream"
 )
@@ -36,8 +37,9 @@ func main() {
 	var (
 		httpAddr    = flag.String("http-addr", envOr("HTTP_ADDR", ":8080"), "HTTP 监听地址（UI/API/ONVIF SOAP）")
 		advertiseIP = flag.String("advertise-ip", envOr("ADVERTISE_IP", ""), "对外宣告 IP，留空自动探测")
-		rtspPush    = flag.String("rtsp-push", envOr("RTSP_PUSH", "rtsp://127.0.0.1:8554"), "ffmpeg 推流目标（mediamtx）")
-		rtspPort    = flag.Int("rtsp-port", envInt("RTSP_PORT", 8554), "对外宣告的 RTSP 端口")
+		rtspPush    = flag.String("rtsp-push", envOr("RTSP_PUSH", "rtsp://127.0.0.1:8554"), "ffmpeg 推流目标（仅 --rtsp-server=false 时使用，指向外部 mediamtx）")
+		rtspPort    = flag.Int("rtsp-port", envInt("RTSP_PORT", 8554), "RTSP 端口（内嵌服务器监听 + 对外宣告）")
+		rtspServer  = flag.Bool("rtsp-server", envBool("RTSP_SERVER", true), "启用内嵌 RTSP 服务器；关闭后按 --rtsp-push 推给外部 mediamtx")
 		dataDir     = flag.String("data-dir", envOr("DATA_DIR", "./data"), "配置持久化目录")
 		ffmpegBin   = flag.String("ffmpeg-bin", envOr("FFMPEG_BIN", "ffmpeg"), "ffmpeg 可执行文件路径")
 		discoveryOn = flag.Bool("discovery", envBool("DISCOVERY", true), "是否开启 WS-Discovery")
@@ -67,6 +69,7 @@ func main() {
 		r.Server.AdvertiseIP = *advertiseIP
 		r.Server.RTSPPushAddr = *rtspPush
 		r.Server.RTSPPort = *rtspPort
+		r.Server.RTSPEmbedded = *rtspServer
 		r.Server.FFmpegBin = *ffmpegBin
 		r.Server.Discovery = *discoveryOn
 		return nil
@@ -93,13 +96,35 @@ func main() {
 	if drifted {
 		logger.Warn("http port drifted", "from", root.Server.HTTPAddr, "to", ln.Addr().String())
 	}
-	uris := onvifserver.URIs{AdvertiseIP: ip, HTTPPort: httpPort, RTSPPort: root.Server.RTSPPort}
+	// 内嵌 RTSP 服务器（gortsplib，替代 mediamtx）；端口被占时与 HTTP 同款漂移。
+	// 实际端口必须先于 uris 计算，保证 GetStreamUri 宣告的地址正确。
+	rtspPortActual := root.Server.RTSPPort
+	pushAddr := root.Server.RTSPPushAddr
+	var rtspSrv *rtspserver.Server
+	if root.Server.RTSPEmbedded {
+		rtspSrv, rtspPortActual, err = startEmbeddedRTSP(root.Server.RTSPPort, logger)
+		if err != nil {
+			logger.Error("embedded rtsp server failed", "err", err.Error())
+			os.Exit(1)
+		}
+		if rtspPortActual != root.Server.RTSPPort {
+			logger.Warn("rtsp port drifted", "from", root.Server.RTSPPort, "to", rtspPortActual)
+		}
+		pushAddr = fmt.Sprintf("rtsp://127.0.0.1:%d", rtspPortActual)
+		go func() {
+			if err := rtspSrv.Wait(); err != nil {
+				logger.Error("embedded rtsp server exited", "err", err.Error())
+			}
+		}()
+		logger.Info("embedded rtsp server started", "port", rtspPortActual, "udp", ":8000/:8001（可用时）")
+	}
+	uris := onvifserver.URIs{AdvertiseIP: ip, HTTPPort: httpPort, RTSPPort: rtspPortActual}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ptzReg := ptzmock.NewRegistry()
-	streams := stream.NewManager(root.Server.RTSPPushAddr, root.Server.FFmpegBin, logger)
+	streams := stream.NewManager(pushAddr, root.Server.FFmpegBin, logger)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
 	// ONVIF 客户端修改编码参数后，重启对应取流进程。
@@ -159,10 +184,67 @@ func main() {
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
 	streams.StopAll()
+	if rtspSrv != nil {
+		rtspSrv.Close()
+	}
 	logger.Info("stopped")
 }
 
 // ---- 辅助 ----
+
+// 内嵌 RTSP 服务器的 UDP 传输端口（与 mediamtx 默认一致）。
+const (
+	rtspUDPPortRTP  = 8000
+	rtspUDPPortRTCP = 8001
+)
+
+// startEmbeddedRTSP 启动内嵌 RTSP 服务器：
+// TCP 端口被占用时向后漂移（与 HTTP 一致）；UDP 端口被占用时降级为仅 TCP。
+func startEmbeddedRTSP(basePort int, logger *slog.Logger) (*rtspserver.Server, int, error) {
+	for i := 0; i < maxPortDrift; i++ {
+		port := basePort + i
+		tcpAddr := fmt.Sprintf(":%d", port)
+		if !tcpAddrFree(tcpAddr) {
+			logger.Warn("rtsp port busy, drifting to next", "port", port)
+			continue
+		}
+		udpRTP, udpRTCP := "", ""
+		if udpPortsFree(rtspUDPPortRTP, rtspUDPPortRTCP) {
+			udpRTP = fmt.Sprintf(":%d", rtspUDPPortRTP)
+			udpRTCP = fmt.Sprintf(":%d", rtspUDPPortRTCP)
+		} else {
+			logger.Warn("rtsp udp ports busy, tcp-only mode", "ports", fmt.Sprintf("%d/%d", rtspUDPPortRTP, rtspUDPPortRTCP))
+		}
+		srv := rtspserver.New(tcpAddr, udpRTP, udpRTCP, logger)
+		if err := srv.Start(); err != nil {
+			srv.Close()
+			return nil, 0, fmt.Errorf("rtsp server start on %s: %w", tcpAddr, err)
+		}
+		return srv, port, nil
+	}
+	return nil, 0, fmt.Errorf("rtsp ports %d-%d all busy", basePort, basePort+maxPortDrift-1)
+}
+
+// tcpAddrFree 探测 TCP 地址是否可绑定（探测后立即释放，存在微小竞争窗口）。
+func tcpAddrFree(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	return ln.Close() == nil
+}
+
+// udpPortsFree 探测 UDP 端口是否可绑定。
+func udpPortsFree(ports ...int) bool {
+	for _, p := range ports {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: p})
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+	}
+	return true
+}
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

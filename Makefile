@@ -43,7 +43,7 @@ release: ## 通过 goreleaser 发布（tag 触发，需 goreleaser 与 GITHUB_TO
 snapshot: ## 本地验证发布产物（不打 tag、不上传）
 	goreleaser build --snapshot --clean
 
-up: ## 一键启动（docker compose，host 网络 + mediamtx）
+up: ## 一键启动（docker compose，host 网络，单容器）
 	docker compose up -d --build
 
 down: ## 停止并移除容器
