@@ -1,11 +1,12 @@
 // Package stream 管理每个摄像头的 ffmpeg 取流进程：
-// 拉取本地源（v4l2/avfoundation/rtsp/testsrc）转码 H264 后推送到 mediamtx。
+// 拉取本地源（v4l2/avfoundation/dshow/rtsp/testsrc）转码 H264 后推送到内嵌 RTSP 服务器。
 package stream
 
 import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -252,6 +253,20 @@ func InputArgs(c config.Camera) []string {
 		src := c.Source
 		if src == "" {
 			src = "0"
+		}
+		args = append(args, "-i", src)
+	case config.TypeDShow:
+		args = append(args, "-f", "dshow")
+		if fps > 0 {
+			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+		}
+		if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+		}
+		src := strings.TrimSpace(c.Source)
+		// 允许直接填设备名；已带 video= 前缀或别名（@device_...）时原样使用。
+		if src != "" && !strings.Contains(src, "=") {
+			src = "video=" + src
 		}
 		args = append(args, "-i", src)
 	case config.TypeRTSP:

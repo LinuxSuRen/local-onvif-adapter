@@ -89,3 +89,7 @@ export function sendPtz(id, operation) {
 export function snapshotUrl(id) {
   return `/api/cameras/${encodeURIComponent(id)}/snapshot?t=${Date.now()}`
 }
+
+export function listDShowDevices() {
+  return request('/api/devices/dshow')
+}
