@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -66,8 +65,8 @@ func (s *Server) Handler() http.Handler {
 	// ONVIF 快照路由由根 mux 直接注册（HandleOnvifSnapshot），
 	// 以获得比 /onvif/ SOAP handler 更高的匹配优先级。
 
-	// Windows 摄像头设备枚举（DirectShow）。
-	mux.HandleFunc("GET /api/devices/dshow", s.handleListDShowDevices)
+	// 本地摄像头设备枚举（跨平台：内置/USB 摄像头）。
+	mux.HandleFunc("GET /api/devices", s.handleListDevices)
 
 	// 前端静态资源。
 	staticHandler := spaHandler()
@@ -332,22 +331,29 @@ func (s *Server) syncStreams() {
 	s.streams.Sync(root.Cameras)
 }
 
-// handleListDShowDevices 枚举本机 DirectShow 视频设备（仅 Windows）。
-func (s *Server) handleListDShowDevices(w http.ResponseWriter, _ *http.Request) {
-	if runtime.GOOS != "windows" {
-		writeError(w, http.StatusBadRequest, "unsupported_platform",
-			"设备枚举仅支持 Windows；其他平台请使用对应源类型（Linux 用 v4l2，macOS 用 avfoundation）")
-		return
-	}
+// handleListDevices 枚举本机视频设备（内置/USB 摄像头，跨平台）。
+// 响应附带当前平台的本地摄像头类型，供 UI 手动输入时兜底。
+func (s *Server) handleListDevices(w http.ResponseWriter, _ *http.Request) {
 	bin := s.store.Root().Server.FFmpegBin
-	devices, err := stream.DShowVideoDevices(bin)
+	devices, err := stream.ListLocalVideoDevices(bin)
 	if err != nil {
-		s.logger.Warn("dshow enumerate failed", "err", err.Error())
+		if errors.Is(err, stream.ErrUnsupportedPlatform) {
+			writeError(w, http.StatusBadRequest, "unsupported_platform",
+				"当前平台不支持本地设备枚举，请使用 RTSP 拉流或测试彩条")
+			return
+		}
+		s.logger.Warn("device enumerate failed", "err", err.Error())
 		writeError(w, http.StatusBadGateway, "device_enum_failed",
-			"枚举设备失败，请确认 ffmpeg 已安装且为含 dshow 支持的完整版")
+			"枚举设备失败，请确认 ffmpeg 已安装且可正常执行")
 		return
 	}
-	writeData(w, http.StatusOK, devices)
+	if devices == nil {
+		devices = []stream.Device{}
+	}
+	writeData(w, http.StatusOK, map[string]any{
+		"devices":      devices,
+		"default_type": stream.DefaultLocalType(),
+	})
 }
 
 // ---- 快照 ----

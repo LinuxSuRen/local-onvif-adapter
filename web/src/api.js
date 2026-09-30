@@ -90,6 +90,6 @@ export function snapshotUrl(id) {
   return `/api/cameras/${encodeURIComponent(id)}/snapshot?t=${Date.now()}`
 }
 
-export function listDShowDevices() {
-  return request('/api/devices/dshow')
+export function listDevices() {
+  return request('/api/devices')
 }

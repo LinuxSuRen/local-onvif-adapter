@@ -230,15 +230,18 @@ func TestUIStaticServed(t *testing.T) {
 	// 这里只保证静态托管路由本身可用，不校验 UI 内容。
 }
 
-func TestDShowDevicesEndpointNonWindows(t *testing.T) {
+func TestListDevicesEndpoint(t *testing.T) {
 	_, ts := newTestServer(t)
-	code, out := doJSON(t, "GET", ts.URL+"/api/devices/dshow", "")
-	if code != http.StatusBadRequest {
-		t.Fatalf("non-windows should be 400, got %d", code)
+	code, out := doJSON(t, "GET", ts.URL+"/api/devices", "")
+	if code != http.StatusOK {
+		t.Fatalf("devices endpoint: %d %v", code, out)
 	}
-	errObj := out["error"].(map[string]any)
-	if errObj["code"] != "unsupported_platform" {
-		t.Fatalf("error code: %v", errObj["code"])
+	data := out["data"].(map[string]any)
+	if _, ok := data["devices"].([]any); !ok {
+		t.Fatalf("devices should be an array: %v", data)
+	}
+	if data["default_type"] == "" {
+		t.Fatal("default_type should be non-empty")
 	}
 }
 

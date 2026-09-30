@@ -76,20 +76,23 @@ make lint      # go vet
 
 ## 摄像头源类型
 
-| 类型 | 说明 | 源示例 |
-|---|---|---|
-| `v4l2` | Linux 本地设备（Docker/Linux） | `/dev/video0` |
-| `avfoundation` | macOS 摄像头（本地开发） | `0`（设备索引） |
-| `dshow` | Windows 摄像头（DirectShow） | `Integrated Camera`（设备名，UI 可下拉选择） |
-| `rtsp` | 已有网络摄像机的 RTSP 流 | `rtsp://user:pass@ip:554/stream` |
-| `testsrc` | ffmpeg 测试彩条（无需真实摄像头） | 留空 |
+管理台添加摄像头时**自动枚举本机摄像头**（内置、USB，名称与连接方式直接列出），
+用户从列表中选择即可，无需关心平台差异；跨平台适配由服务端完成：
+
+| 内部类型 | 平台 | 枚举方式 | 源形式 |
+|---|---|---|---|
+| `v4l2` | Linux | 扫描 `/dev/video*` + sysfs 读取名称与连接方式（过滤 UVC 元数据节点） | `/dev/video0` |
+| `avfoundation` | macOS | `ffmpeg -list_devices`（过滤屏幕采集） | 设备索引 `0` |
+| `dshow` | Windows | `ffmpeg -list_devices` | 设备名 |
+| `rtsp` | 任意 | 手动填写 | `rtsp://user:pass@ip:554/stream` |
+| `testsrc` | 任意 | 无需设备 | 留空 |
 
 每个摄像头可配置分辨率（0 表示自动）、帧率、码率、是否红外、是否启用。
+枚举列表也支持手动输入设备源（高级场景）。
 
 ### Windows 说明
 
-- 添加摄像头时类型选"Windows 摄像头"，源会自动枚举 DirectShow 设备供下拉选择
-  （也可手填，或使用 `video=@device_cm_{...}` 别名形式）
+- 添加摄像头时直接从枚举列表选择设备（也可手填，或使用 `video=@device_cm_{...}` 别名形式）
 - ffmpeg 需为含 dshow 支持的完整版（[gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
   full 版或 `winget install ffmpeg` 均可）
 - 防火墙首启放行：UDP 3702（WS-Discovery 自动发现）与 UDP 8000/8001
