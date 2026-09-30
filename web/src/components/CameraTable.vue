@@ -13,6 +13,7 @@ const emit = defineEmits(['add', 'refresh', 'edit', 'snapshot', 'ptz', 'remove']
 const TYPE_META = {
   v4l2: { label: 'v4l2 设备', tag: 'primary' },
   avfoundation: { label: 'macOS 摄像头', tag: 'success' },
+  dshow: { label: 'Windows 摄像头', tag: 'danger' },
   rtsp: { label: 'RTSP 拉流', tag: 'warning' },
   testsrc: { label: '测试彩条', tag: 'info' }
 }

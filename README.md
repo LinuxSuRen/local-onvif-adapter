@@ -80,10 +80,21 @@ make lint      # go vet
 |---|---|---|
 | `v4l2` | Linux 本地设备（Docker/Linux） | `/dev/video0` |
 | `avfoundation` | macOS 摄像头（本地开发） | `0`（设备索引） |
+| `dshow` | Windows 摄像头（DirectShow） | `Integrated Camera`（设备名，UI 可下拉选择） |
 | `rtsp` | 已有网络摄像机的 RTSP 流 | `rtsp://user:pass@ip:554/stream` |
 | `testsrc` | ffmpeg 测试彩条（无需真实摄像头） | 留空 |
 
 每个摄像头可配置分辨率（0 表示自动）、帧率、码率、是否红外、是否启用。
+
+### Windows 说明
+
+- 添加摄像头时类型选"Windows 摄像头"，源会自动枚举 DirectShow 设备供下拉选择
+  （也可手填，或使用 `video=@device_cm_{...}` 别名形式）
+- ffmpeg 需为含 dshow 支持的完整版（[gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
+  full 版或 `winget install ffmpeg` 均可）
+- 防火墙首启放行：UDP 3702（WS-Discovery 自动发现）与 UDP 8000/8001
+  （RTSP over UDP，不放行也不影响 TCP 拉流）
+- 老摄像头只输出 MJPEG/YUYV 原始格式也没关系，统一转码 H264
 
 ## ONVIF 覆盖清单
 

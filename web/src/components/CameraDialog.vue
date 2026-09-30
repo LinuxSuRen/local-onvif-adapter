@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createCamera, updateCamera } from '../api'
+import { createCamera, updateCamera, listDShowDevices } from '../api'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -34,6 +34,7 @@ const form = reactive({ ...DEFAULT_FORM })
 const TYPE_OPTIONS = [
   { value: 'v4l2', label: 'v4l2 设备' },
   { value: 'avfoundation', label: 'macOS 摄像头' },
+  { value: 'dshow', label: 'Windows 摄像头' },
   { value: 'rtsp', label: 'RTSP 拉流' },
   { value: 'testsrc', label: '测试彩条' }
 ]
@@ -41,11 +42,44 @@ const TYPE_OPTIONS = [
 const SOURCE_PLACEHOLDER = {
   v4l2: '/dev/video0',
   avfoundation: '0（设备索引）',
+  dshow: '设备名（如 Integrated Camera）',
   rtsp: 'rtsp://user:pass@ip:554/stream',
   testsrc: '留空即可，生成 1280×720 彩条'
 }
 
 const isTestSrc = computed(() => form.type === 'testsrc')
+const isDShow = computed(() => form.type === 'dshow')
+
+// Windows 设备枚举：可选下拉，失败时回退为手填。
+const dshowDevices = ref([])
+const dshowLoading = ref(false)
+const dshowEnumFailed = ref(false)
+let dshowLoaded = false
+
+async function loadDShowDevices(showToast = false) {
+  dshowLoading.value = true
+  try {
+    const devices = await listDShowDevices()
+    dshowDevices.value = Array.isArray(devices) ? devices : []
+    dshowEnumFailed.value = false
+  } catch (e) {
+    dshowDevices.value = []
+    dshowEnumFailed.value = true
+    if (showToast) ElMessage.warning(e.message)
+  } finally {
+    dshowLoading.value = false
+    dshowLoaded = true
+  }
+}
+
+watch(
+  () => [props.visible, form.type],
+  ([visible, type]) => {
+    if (visible && type === 'dshow' && !dshowLoaded) {
+      loadDShowDevices()
+    }
+  }
+)
 
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -142,11 +176,38 @@ async function handleSave() {
         </el-select>
       </el-form-item>
       <el-form-item label="源" prop="source">
-        <el-input
-          v-model="form.source"
-          :disabled="isTestSrc"
-          :placeholder="SOURCE_PLACEHOLDER[form.type]"
-        />
+        <template v-if="isDShow && !dshowEnumFailed && dshowDevices.length">
+          <div class="num-row">
+            <el-select
+              v-model="form.source"
+              class="full-width"
+              filterable
+              allow-create
+              default-first-option
+              :loading="dshowLoading"
+              placeholder="选择设备，或直接输入设备名"
+            >
+              <el-option v-for="d in dshowDevices" :key="d" :label="d" :value="d" />
+            </el-select>
+            <el-button
+              class="enum-refresh"
+              :loading="dshowLoading"
+              @click="loadDShowDevices(true)"
+            >刷新</el-button>
+          </div>
+        </template>
+        <template v-else>
+          <el-input
+            v-model="form.source"
+            :disabled="isTestSrc"
+            :placeholder="SOURCE_PLACEHOLDER[form.type]"
+          />
+          <div v-if="isDShow" class="form-tip">
+            {{ dshowEnumFailed
+              ? '设备枚举不可用（仅 Windows 支持枚举），请手动填设备名；可用 ffmpeg -list_devices true -f dshow -i dummy 查询'
+              : '未枚举到设备，请确认摄像头已连接后点刷新，或直接输入设备名' }}
+          </div>
+        </template>
       </el-form-item>
       <el-form-item label="分辨率">
         <div class="num-row">
@@ -202,5 +263,8 @@ async function handleSave() {
   color: #909399;
   line-height: 1.5;
   margin-top: 4px;
+}
+.enum-refresh {
+  margin-left: 8px;
 }
 </style>

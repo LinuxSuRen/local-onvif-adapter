@@ -230,6 +230,18 @@ func TestUIStaticServed(t *testing.T) {
 	// 这里只保证静态托管路由本身可用，不校验 UI 内容。
 }
 
+func TestDShowDevicesEndpointNonWindows(t *testing.T) {
+	_, ts := newTestServer(t)
+	code, out := doJSON(t, "GET", ts.URL+"/api/devices/dshow", "")
+	if code != http.StatusBadRequest {
+		t.Fatalf("non-windows should be 400, got %d", code)
+	}
+	errObj := out["error"].(map[string]any)
+	if errObj["code"] != "unsupported_platform" {
+		t.Fatalf("error code: %v", errObj["code"])
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	_, ts := newTestServer(t)
 	code, out := doJSON(t, "GET", ts.URL+"/healthz", "")

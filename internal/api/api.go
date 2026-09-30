@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,9 @@ func (s *Server) Handler() http.Handler {
 
 	// ONVIF 快照路由由根 mux 直接注册（HandleOnvifSnapshot），
 	// 以获得比 /onvif/ SOAP handler 更高的匹配优先级。
+
+	// Windows 摄像头设备枚举（DirectShow）。
+	mux.HandleFunc("GET /api/devices/dshow", s.handleListDShowDevices)
 
 	// 前端静态资源。
 	staticHandler := spaHandler()
@@ -326,6 +330,24 @@ func (s *Server) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 func (s *Server) syncStreams() {
 	root := s.store.Root()
 	s.streams.Sync(root.Cameras)
+}
+
+// handleListDShowDevices 枚举本机 DirectShow 视频设备（仅 Windows）。
+func (s *Server) handleListDShowDevices(w http.ResponseWriter, _ *http.Request) {
+	if runtime.GOOS != "windows" {
+		writeError(w, http.StatusBadRequest, "unsupported_platform",
+			"设备枚举仅支持 Windows；其他平台请使用对应源类型（Linux 用 v4l2，macOS 用 avfoundation）")
+		return
+	}
+	bin := s.store.Root().Server.FFmpegBin
+	devices, err := stream.DShowVideoDevices(bin)
+	if err != nil {
+		s.logger.Warn("dshow enumerate failed", "err", err.Error())
+		writeError(w, http.StatusBadGateway, "device_enum_failed",
+			"枚举设备失败，请确认 ffmpeg 已安装且为含 dshow 支持的完整版")
+		return
+	}
+	writeData(w, http.StatusOK, devices)
 }
 
 // ---- 快照 ----
