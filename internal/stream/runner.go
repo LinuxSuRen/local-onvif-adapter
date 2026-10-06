@@ -276,7 +276,9 @@ func InputArgs(c config.Camera) []string {
 		if c.Width > 0 && c.Height > 0 {
 			w, h = c.Width, c.Height
 		}
-		args = append(args, "-f", "lavfi", "-i", fmt.Sprintf("testsrc=size=%dx%d:rate=%d", w, h, fps))
+		// lavfi 合成源没有固有节奏，必须 -re 按帧率实时读取，
+		// 否则 ffmpeg 会全速推流（实测 ~32 倍速），拖垮整条转发链路
+		args = append(args, "-re", "-f", "lavfi", "-i", fmt.Sprintf("testsrc=size=%dx%d:rate=%d", w, h, fps))
 	default:
 		args = append(args, "-i", c.Source)
 	}
