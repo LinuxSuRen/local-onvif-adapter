@@ -97,3 +97,16 @@ func TestManagerSyncStartStop(t *testing.T) {
 	}
 	m.StopAll()
 }
+
+func TestInputArgsTestSrcRealtimePacing(t *testing.T) {
+	cam := config.Camera{Type: config.TypeTestSrc, Framerate: 15}
+	got := strings.Join(InputArgs(cam), " ")
+	if !strings.Contains(got, "-re") {
+		t.Fatalf("testsrc 输入应包含 -re 实时读取，got: %s", got)
+	}
+	// 设备/网络源不应被 -re 干预读取节奏
+	dev := config.Camera{Type: config.TypeV4L2, Source: "/dev/video0"}
+	if dv := strings.Join(InputArgs(dev), " "); strings.Contains(dv, "-re") {
+		t.Fatalf("v4l2 输入不应包含 -re，got: %s", dv)
+	}
+}
