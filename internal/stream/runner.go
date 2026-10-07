@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -269,6 +270,8 @@ func InputArgs(c config.Camera) []string {
 			src = "video=" + src
 		}
 		args = append(args, "-i", src)
+	case config.TypeScreen:
+		args = append(args, screenInputArgs(c)...)
 	case config.TypeRTSP:
 		args = append(args, "-rtsp_transport", "tcp", "-i", c.Source)
 	case config.TypeTestSrc:
@@ -281,6 +284,59 @@ func InputArgs(c config.Camera) []string {
 		args = append(args, "-re", "-f", "lavfi", "-i", fmt.Sprintf("testsrc=size=%dx%d:rate=%d", w, h, fps))
 	default:
 		args = append(args, "-i", c.Source)
+	}
+	return args
+}
+
+// screenInputArgs 按平台构造屏幕采集的 ffmpeg 输入参数：
+//   - macOS：source 为 avfoundation 屏幕索引（枚举接口下发，如 "1"）
+//   - Linux：source 为 X display（如 ":0.0"，一屏一源）
+//   - Windows：source 为 desktop（gdigrab 主屏）或 title=窗口名
+func screenInputArgs(c config.Camera) []string {
+	return screenInputArgsFor(runtime.GOOS, c)
+}
+
+// screenInputArgsFor 按指定 GOOS 构造参数（goos 参数仅为可测试性）。
+func screenInputArgsFor(goos string, c config.Camera) []string {
+	fps := c.FramerateOrDefault()
+	var args []string
+	switch goos {
+	case "darwin":
+		args = append(args, "-f", "avfoundation", "-capture_cursor", "1", "-pixel_format", "bgr0")
+		if fps > 0 {
+			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+		}
+		src := strings.TrimSpace(c.Source)
+		if src == "" {
+			src = "0"
+		}
+		args = append(args, "-i", src)
+	case "windows":
+		args = append(args, "-f", "gdigrab")
+		if fps > 0 {
+			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+		}
+		if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+		}
+		src := strings.TrimSpace(c.Source)
+		if src == "" {
+			src = "desktop"
+		}
+		args = append(args, "-i", src)
+	default: // linux（x11grab）
+		args = append(args, "-f", "x11grab")
+		if fps > 0 {
+			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
+		}
+		if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+		}
+		src := strings.TrimSpace(c.Source)
+		if src == "" {
+			src = ":0.0"
+		}
+		args = append(args, "-i", src)
 	}
 	return args
 }

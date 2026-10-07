@@ -32,7 +32,7 @@ const DEFAULT_FORM = {
 const form = reactive({ ...DEFAULT_FORM })
 
 // 用户只选择"来源方式"，平台差异（v4l2/avfoundation/dshow）由设备枚举结果自动携带。
-const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow']
+const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow', 'screen']
 const MODE_OPTIONS = [
   { value: 'local', label: '本地摄像头' },
   { value: 'rtsp', label: '网络摄像头（RTSP）' },
@@ -76,6 +76,7 @@ watch(
 function kindLabel(kind) {
   if (kind === 'builtin') return '内置'
   if (kind === 'usb') return 'USB'
+  if (kind === 'screen') return '屏幕'
   return ''
 }
 
