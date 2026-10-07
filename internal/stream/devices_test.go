@@ -226,9 +226,9 @@ func TestInputArgsDShow(t *testing.T) {
 
 func TestScreenInputArgsPerPlatform(t *testing.T) {
 	cam := config.Camera{Type: config.TypeScreen, Source: "2", Framerate: 15, Width: 1920, Height: 1080}
-	// macOS：avfoundation 屏幕索引 + 光标捕获 + bgr0。
+	// macOS：screencapture 管道 → image2pipe（绕开 avfoundation 权限限制）。
 	got := strings.Join(screenInputArgsFor("darwin", cam), " ")
-	for _, want := range []string{"-f avfoundation", "-capture_cursor 1", "-pixel_format bgr0", "-framerate 15", "-i 2"} {
+	for _, want := range []string{"-f image2pipe", "-framerate 15", "-i pipe:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("darwin missing %q in %q", want, got)
 		}

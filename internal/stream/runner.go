@@ -5,6 +5,7 @@ package stream
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -162,6 +163,30 @@ func (r *Runner) Run() {
 		cmd := exec.Command(r.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		var stderr tailBuffer
 		cmd.Stderr = &stderr
+
+		// macOS 屏幕采集：启动 screencapture 循环子进程，其 stdout 接到 ffmpeg 的 stdin。
+		// 用 os.Pipe() 手动建管道；ffmpeg 退出后（cmd.Run 返回）再关写端并 kill shell。
+		if r.cam.Type == config.TypeScreen && runtime.GOOS == "darwin" {
+			pr, pw, pipeErr := os.Pipe()
+			if pipeErr == nil {
+				shell := exec.Command("/bin/sh", "-c", darwinScreenCmd(r.cam))
+				shell.Stdout = pw
+				if startErr := shell.Start(); startErr == nil {
+					cmd.Stdin = pr
+					defer func() {
+						_ = pw.Close()
+						_ = pr.Close()
+						if shell.Process != nil {
+							_ = shell.Process.Kill()
+						}
+					}()
+				} else {
+					_ = pr.Close()
+					_ = pw.Close()
+				}
+			}
+		}
+
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
 		r.setRunning(true, "", &starts)
 		started := time.Now()
@@ -289,7 +314,7 @@ func InputArgs(c config.Camera) []string {
 }
 
 // screenInputArgs 按平台构造屏幕采集的 ffmpeg 输入参数：
-//   - macOS：source 为 avfoundation 屏幕索引（枚举接口下发，如 "1"）
+//   - macOS：用包装脚本持续 screencapture → ffmpeg image2pipe（绕开 avfoundation 权限问题）
 //   - Linux：source 为 X display（如 ":0.0"，一屏一源）
 //   - Windows：source 为 desktop（gdigrab 主屏）或 title=窗口名
 func screenInputArgs(c config.Camera) []string {
@@ -298,19 +323,12 @@ func screenInputArgs(c config.Camera) []string {
 
 // screenInputArgsFor 按指定 GOOS 构造参数（goos 参数仅为可测试性）。
 func screenInputArgsFor(goos string, c config.Camera) []string {
+	if goos == "darwin" {
+		return darwinScreenArgs(c)
+	}
 	fps := c.FramerateOrDefault()
 	var args []string
 	switch goos {
-	case "darwin":
-		args = append(args, "-f", "avfoundation", "-capture_cursor", "1", "-pixel_format", "bgr0")
-		if fps > 0 {
-			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
-		}
-		src := strings.TrimSpace(c.Source)
-		if src == "" {
-			src = "0"
-		}
-		args = append(args, "-i", src)
 	case "windows":
 		args = append(args, "-f", "gdigrab")
 		if fps > 0 {
@@ -341,6 +359,32 @@ func screenInputArgsFor(goos string, c config.Camera) []string {
 	return args
 }
 
+// darwinScreenArgs macOS 屏幕采集：通过 /bin/sh -c 包装的 screencapture 循环
+// 截图到管道，ffmpeg 以 image2pipe 读取。
+// 绕开未签名 ffmpeg 的 avfoundation 屏幕采集权限限制（macOS 对未签名
+// 二进制不弹权限框，avfoundation 会挂起或返回灰色帧）。
+// screencapture 是系统工具自带屏幕录制权限。
+func darwinScreenArgs(c config.Camera) []string {
+	fps := c.FramerateOrDefault()
+	if fps <= 0 {
+		fps = 5
+	}
+	return []string{"-f", "image2pipe", "-framerate", fmt.Sprintf("%d", fps), "-i", "pipe:"}
+}
+
+// darwinScreenCmd 返回 macOS 屏幕采集的 shell 包装命令。
+// runner 在 darwin 平台 screen 类型时用此命令作为 ffmpeg 的 stdin 来源。
+func darwinScreenCmd(c config.Camera) string {
+	fps := c.FramerateOrDefault()
+	if fps <= 0 {
+		fps = 5
+	}
+	return fmt.Sprintf(
+		"while true; do screencapture -x -t png /tmp/_onvif_sc_tmp.png 2>/dev/null; cat /tmp/_onvif_sc_tmp.png; rm -f /tmp/_onvif_sc_tmp.png; sleep %.3f; done",
+		1.0/float64(fps),
+	)
+}
+
 // BuildArgs 构造完整的 ffmpeg 取流推流命令参数。
 func BuildArgs(c config.Camera, pushURL string) []string {
 	fps := c.FramerateOrDefault()
@@ -348,8 +392,17 @@ func BuildArgs(c config.Camera, pushURL string) []string {
 	if gov < 10 {
 		gov = 10
 	}
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	args := []string{"-hide_banner", "-loglevel", "error"}
+	// macOS 屏幕源需要从 stdin 管道读 screencapture 帧，不能加 -nostdin。
+	if !(c.Type == config.TypeScreen && runtime.GOOS == "darwin") {
+		args = append(args, "-nostdin")
+	}
 	args = append(args, InputArgs(c)...)
+	// macOS 屏幕采集的 PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限，
+	// 缩放到 1280 宽保证实时性（未配置分辨率时）。
+	if c.Type == config.TypeScreen && runtime.GOOS == "darwin" && c.Width == 0 {
+		args = append(args, "-vf", "scale=1280:-2")
+	}
 	args = append(args,
 		"-c:v", "libx264",
 		"-preset", "veryfast",
