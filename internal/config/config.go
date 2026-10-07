@@ -18,6 +18,7 @@ const (
 	TypeV4L2         CameraType = "v4l2"         // Linux 本地设备，如 /dev/video0
 	TypeAVFoundation CameraType = "avfoundation" // macOS 本地摄像头，source 为设备索引
 	TypeDShow        CameraType = "dshow"        // Windows 本地摄像头，source 为 DirectShow 设备名
+	TypeScreen       CameraType = "screen"       // 屏幕采集：macOS 屏幕索引 / Linux X display(:0.0) / Windows desktop
 	TypeRTSP         CameraType = "rtsp"         // 拉取已有网络摄像头的 RTSP 流
 	TypeTestSrc      CameraType = "testsrc"      // ffmpeg 测试彩条，无需真实摄像头
 )
@@ -25,7 +26,7 @@ const (
 // Valid 校验来源类型是否合法。
 func (t CameraType) Valid() bool {
 	switch t {
-	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeRTSP, TypeTestSrc:
+	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc:
 		return true
 	default:
 		return false

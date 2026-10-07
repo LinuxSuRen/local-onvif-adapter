@@ -71,14 +71,18 @@ func TestParseAVFDevices(t *testing.T) {
 [avfoundation @ 0x7fa] [0] MacBook Pro Microphone
 `
 	devices := parseAVFDevices(sample)
-	// 屏幕采集设备被过滤。
-	if len(devices) != 2 {
-		t.Fatalf("devices = %+v, want 2 video devices", devices)
+	// 屏幕采集设备以 screen 类型返回（多屏 = 多个 Capture screen N 条目）。
+	if len(devices) != 3 {
+		t.Fatalf("devices = %+v, want 3", devices)
 	}
 	if devices[0].Name != "FaceTime高清相机（内建）" || devices[0].Source != "0" {
 		t.Fatalf("device0: %+v", devices[0])
 	}
-	if devices[0].Kind != kindBuiltin || devices[1].Kind != kindUSB {
+	if devices[1].Name != "Capture screen 0" || devices[1].Source != "1" ||
+		devices[1].Type != string(config.TypeScreen) || devices[1].Kind != kindScreen {
+		t.Fatalf("screen device: %+v", devices[1])
+	}
+	if devices[2].Kind != kindUSB {
 		t.Fatalf("kinds: %+v", devices)
 	}
 	if devices[0].Type != string(config.TypeAVFoundation) {
@@ -160,8 +164,8 @@ func TestParseAVFDevicesNewFormat(t *testing.T) {
 [avfoundation @ 0x7fa] [0] MacBook Pro Microphone [uid:Built-in Microphone]
 `
 	devices := parseAVFDevices(sample)
-	if len(devices) != 2 {
-		t.Fatalf("devices = %+v, want 2", devices)
+	if len(devices) != 3 {
+		t.Fatalf("devices = %+v, want 3", devices)
 	}
 	if devices[0].Name != "FaceTime HD Camera" {
 		t.Fatalf("uid/serial suffix not stripped: %+v", devices[0])
@@ -171,6 +175,9 @@ func TestParseAVFDevicesNewFormat(t *testing.T) {
 	}
 	if devices[0].Kind != kindBuiltin || devices[1].Kind != kindUSB {
 		t.Fatalf("kinds: %+v", devices)
+	}
+	if devices[2].Name != "Capture screen 0" || devices[2].Type != string(config.TypeScreen) || devices[2].Kind != kindScreen {
+		t.Fatalf("screen: %+v", devices[2])
 	}
 }
 
@@ -214,5 +221,35 @@ func TestInputArgsDShow(t *testing.T) {
 	got = strings.Join(InputArgs(cam), " ")
 	if !strings.Contains(got, `-i video=@device_cm_{GUID}\Cam`) {
 		t.Fatalf("alias passthrough: %q", got)
+	}
+}
+
+func TestScreenInputArgsPerPlatform(t *testing.T) {
+	cam := config.Camera{Type: config.TypeScreen, Source: "2", Framerate: 15, Width: 1920, Height: 1080}
+	// macOS：screencapture 管道 → image2pipe（绕开 avfoundation 权限限制）。
+	got := strings.Join(screenInputArgsFor("darwin", cam), " ")
+	for _, want := range []string{"-f image2pipe", "-framerate 15", "-i pipe:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("darwin missing %q in %q", want, got)
+		}
+	}
+	// Linux：x11grab + display 默认 :0.0。
+	got = strings.Join(screenInputArgsFor("linux", config.Camera{Type: config.TypeScreen, Framerate: 15, Width: 1920, Height: 1080}), " ")
+	for _, want := range []string{"-f x11grab", "-video_size 1920x1080", "-i :0.0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("linux missing %q in %q", want, got)
+		}
+	}
+	// Windows：gdigrab + desktop 默认。
+	got = strings.Join(screenInputArgsFor("windows", config.Camera{Type: config.TypeScreen, Framerate: 15, Width: 1920, Height: 1080}), " ")
+	for _, want := range []string{"-f gdigrab", "-video_size 1920x1080", "-i desktop"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("windows missing %q in %q", want, got)
+		}
+	}
+	// source 显式指定时原样使用。
+	got = strings.Join(screenInputArgsFor("linux", config.Camera{Type: config.TypeScreen, Source: ":0.1"}), " ")
+	if !strings.Contains(got, "-i :0.1") {
+		t.Fatalf("explicit display: %q", got)
 	}
 }
