@@ -43,6 +43,14 @@ async function copyEndpoint() {
       </el-descriptions-item>
       <el-descriptions-item label="版本">
         {{ system && system.version ? system.version : '—' }}
+        <a
+          href="https://github.com/LinuxSuRen/local-onvif-adapter"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="gh-link"
+        >
+          <el-icon><Link /></el-icon>GitHub
+        </a>
       </el-descriptions-item>
       <el-descriptions-item label="已启用 profile 数">
         {{ system && system.profile_count != null ? system.profile_count : '—' }}
@@ -60,5 +68,17 @@ async function copyEndpoint() {
 }
 .copy-btn {
   margin-left: 8px;
+}
+.gh-link {
+  margin-left: 12px;
+  font-size: 13px;
+  text-decoration: none;
+  color: #409eff;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.gh-link:hover {
+  text-decoration: underline;
 }
 </style>
