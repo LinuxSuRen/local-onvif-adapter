@@ -93,3 +93,7 @@ export function snapshotUrl(id) {
 export function listDevices() {
   return request('/api/devices')
 }
+
+export function updateDiscovery(enabled) {
+  return request('/api/discovery', { method: 'PUT', body: { enabled } })
+}

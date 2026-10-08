@@ -120,9 +120,6 @@ func main() {
 	}
 	uris := onvifserver.URIs{AdvertiseIP: ip, HTTPPort: httpPort, RTSPPort: rtspPortActual}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	ptzReg := ptzmock.NewRegistry()
 	streams := stream.NewManager(pushAddr, root.Server.FFmpegBin, logger)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
@@ -152,19 +149,21 @@ func main() {
 		streams.Sync(root.Cameras)
 	}()
 
+	// WS-Discovery：创建 responder 并按配置决定是否启动；API 可运行时切换。
+	scopes := []string{
+		"onvif://www.onvif.org/type/NetworkVideoTransmitter",
+		"onvif://www.onvif.org/type/video_encoder",
+		"onvif://www.onvif.org/type/ptz",
+		"onvif://www.onvif.org/Profile/Streaming",
+		"onvif://www.onvif.org/name/" + root.Model,
+	}
+	responder := discovery.New("urn:uuid:local-onvif-adapter-"+root.Serial, uris.XAddr(), scopes, logger)
 	if root.Server.Discovery {
-		scopes := []string{
-			"onvif://www.onvif.org/type/NetworkVideoTransmitter",
-			"onvif://www.onvif.org/type/video_encoder",
-			"onvif://www.onvif.org/type/ptz",
-			"onvif://www.onvif.org/Profile/Streaming",
-			"onvif://www.onvif.org/name/" + root.Model,
-		}
-		responder := discovery.New("urn:uuid:local-onvif-adapter-"+root.Serial, uris.XAddr(), scopes, logger)
-		go responder.Run(ctx)
+		responder.Start()
 	} else {
 		logger.Info("ws-discovery disabled")
 	}
+	apiSrv.DiscoverySwitch = responder
 
 	go func() {
 		logger.Info("http server starting",
@@ -174,7 +173,6 @@ func main() {
 			"rtsp", fmt.Sprintf("rtsp://%s:%d", ip, uris.RTSPPort))
 		if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Error("http server failed", "err", err.Error())
-			cancel()
 		}
 	}()
 

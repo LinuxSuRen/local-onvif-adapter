@@ -1,9 +1,13 @@
 <script setup>
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { updateDiscovery } from '../api'
 
 const props = defineProps({
   system: { type: Object, default: null }
 })
+const emit = defineEmits(['updated'])
+const switching = ref(false)
 
 async function copyEndpoint() {
   const text = props.system && props.system.onvif_endpoint
@@ -13,6 +17,19 @@ async function copyEndpoint() {
     ElMessage.success('已复制')
   } catch (e) {
     ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+async function onToggleDiscovery(val) {
+  switching.value = true
+  try {
+    await updateDiscovery(val)
+    ElMessage.success(val ? 'WS-Discovery 已开启' : 'WS-Discovery 已关闭')
+    emit('updated')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    switching.value = false
   }
 }
 </script>
@@ -36,9 +53,12 @@ async function copyEndpoint() {
         {{ system && system.advertise_ip ? system.advertise_ip : '—' }}
       </el-descriptions-item>
       <el-descriptions-item label="WS-Discovery">
-        <el-tag v-if="system" :type="system.discovery_enabled ? 'success' : 'info'" size="small">
-          {{ system.discovery_enabled ? '已开启' : '已关闭' }}
-        </el-tag>
+        <el-switch
+          v-if="system"
+          :model-value="system.discovery_enabled"
+          :loading="switching"
+          @change="(v) => onToggleDiscovery(v)"
+        />
         <span v-else>—</span>
       </el-descriptions-item>
       <el-descriptions-item label="版本">
