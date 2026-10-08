@@ -496,3 +496,44 @@ func TestGetSystemDateAndTime(t *testing.T) {
 		}
 	}
 }
+
+// TestImagingFocusCapabilities 验证焦距相关能力声明与操作。
+func TestImagingFocusCapabilities(t *testing.T) {
+	s := newTestService(t, twoCameras()...)
+
+	// GetOptions 应声明 Focus 能力。
+	body := callOp(t, s, "timg", "GetOptions", `<timg:VideoSourceToken>vs_cam1</timg:VideoSourceToken>`)
+	for _, want := range []string{"AutoFocusMode", "DefaultSpeed", "NearLimit", "FarLimit"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("GetOptions missing %s: %s", want, body)
+		}
+	}
+
+	// GetMoveOptions 应返回焦距移动范围。
+	body = callOp(t, s, "timg", "GetMoveOptions", `<timg:VideoSourceToken>vs_cam1</timg:VideoSourceToken>`)
+	for _, want := range []string{"Absolute", "Relative", "Continuous", "NearLimit", "FarLimit"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("GetMoveOptions missing %s: %s", want, body)
+		}
+	}
+
+	// Move：绝对焦距 → 响应成功。
+	body = callOp(t, s, "timg", "Move",
+		`<timg:VideoSourceToken>vs_cam1</timg:VideoSourceToken>`+
+			`<timg:Focus><tt:Absolute x="0.5" xmlns:tt="http://www.onvif.org/ver10/schema"/></timg:Focus>`)
+	if !strings.Contains(body, "MoveResponse") {
+		t.Fatalf("focus move: %s", body)
+	}
+
+	// Stop：停止焦距移动。
+	body = callOp(t, s, "timg", "Stop", `<timg:VideoSourceToken>vs_cam1</timg:VideoSourceToken>`)
+	if !strings.Contains(body, "StopResponse") {
+		t.Fatalf("focus stop: %s", body)
+	}
+
+	// PTZ GetServiceCapabilities 应声明 Zoom 支持。
+	body = callOp(t, s, "tptz", "GetServiceCapabilities", "")
+	if !strings.Contains(body, `Zoom="true"`) {
+		t.Fatalf("PTZ capabilities should declare zoom: %s", body)
+	}
+}

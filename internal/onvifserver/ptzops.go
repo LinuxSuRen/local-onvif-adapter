@@ -34,7 +34,7 @@ func registerPTZOps() {
 	reg(nsPTZ, "RemovePreset", withProfileTokenPTZ(opRemovePreset))
 	reg(nsPTZ, "GetServiceCapabilities", func(s *Service, _ []byte) (string, error) {
 		return `<tptz:GetServiceCapabilitiesResponse>` +
-			`<tptz:Capabilities EFlip="false" Reverse="false" ContinuousMove="true" RelativeMove="true" AbsoluteMove="true" Presets="true"/>` +
+			`<tptz:Capabilities EFlip="false" Reverse="false" ContinuousMove="true" RelativeMove="true" AbsoluteMove="true" Presets="true" Zoom="true"/>` +
 			`</tptz:GetServiceCapabilitiesResponse>`, nil
 	})
 }
