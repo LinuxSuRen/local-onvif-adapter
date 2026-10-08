@@ -14,6 +14,7 @@ const TYPE_META = {
   v4l2: { label: '本地摄像头', tag: 'primary' },
   avfoundation: { label: '本地摄像头', tag: 'primary' },
   dshow: { label: '本地摄像头', tag: 'primary' },
+  screen: { label: '屏幕采集', tag: 'success' },
   rtsp: { label: 'RTSP 拉流', tag: 'warning' },
   testsrc: { label: '测试彩条', tag: 'info' }
 }

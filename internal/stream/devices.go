@@ -32,6 +32,7 @@ type Device struct {
 const (
 	kindBuiltin = "builtin"
 	kindUSB     = "usb"
+	kindScreen  = "screen"
 	kindUnknown = "unknown"
 	enumTimeout = 10 * time.Second
 )
@@ -173,8 +174,14 @@ func parseAVFDevices(stderr string) []Device {
 			if idx := strings.Index(name, " [uid:"); idx >= 0 {
 				name = strings.TrimSpace(name[:idx])
 			}
-			// 屏幕采集（Capture screen N）不是摄像头，过滤。
+			// 屏幕采集设备（Capture screen N）标记为屏幕源而非摄像头。
 			if strings.HasPrefix(name, "Capture screen") {
+				devices = append(devices, Device{
+					Name:   name,
+					Source: m[1],
+					Type:   string(config.TypeScreen),
+					Kind:   kindScreen,
+				})
 				continue
 			}
 			devices = append(devices, Device{
