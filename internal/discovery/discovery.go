@@ -29,6 +29,7 @@ type Responder struct {
 	XAddr       string   // http://ip:port/onvif/device_service
 	Scopes      []string // 发现域
 	logger      *slog.Logger
+	cancel      context.CancelFunc
 }
 
 // New 创建应答器。
@@ -37,6 +38,20 @@ func New(endpointURN, xaddr string, scopes []string, logger *slog.Logger) *Respo
 		logger = slog.Default()
 	}
 	return &Responder{EndpointURN: endpointURN, XAddr: xaddr, Scopes: scopes, logger: logger}
+}
+
+// Start 在后台启动应答器（非阻塞）。
+func (r *Responder) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	go r.Run(ctx)
+}
+
+// Stop 停止应答器。
+func (r *Responder) Stop() {
+	if r.cancel != nil {
+		r.cancel()
+	}
 }
 
 var messageIDRe = regexp.MustCompile(`<[^>]*:MessageID[^>]*>([^<]+)<`)
@@ -50,6 +65,11 @@ func (r *Responder) Run(ctx context.Context) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	// ctx 取消时关闭连接以立即退出。
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
 	addr := mustResolve(multicastAddr)
 	if err := joinGroup(conn, addr); err != nil {
 		r.logger.Warn("ws-discovery join multicast failed", "err", err.Error())

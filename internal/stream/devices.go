@@ -40,16 +40,58 @@ const (
 // ListLocalVideoDevices 枚举当前平台的本机视频设备（内置/USB 摄像头）。
 // 找不到设备时返回空列表而非错误；错误仅在枚举机制本身失败时返回。
 func ListLocalVideoDevices(ffmpegBin string) ([]Device, error) {
+	var devices []Device
+	var err error
 	switch runtime.GOOS {
 	case "linux":
-		return listV4L2Devices("/sys", "/dev")
+		devices, err = listV4L2Devices("/sys", "/dev")
+		devices = append(devices, listLinuxScreens()...)
 	case "darwin":
-		return listAVFDevices(ffmpegBin)
+		devices, err = listAVFDevices(ffmpegBin)
 	case "windows":
-		return listDShowDevices(ffmpegBin)
+		devices, err = listDShowDevices(ffmpegBin)
+		devices = append(devices, listWindowsScreens()...)
 	default:
 		return nil, ErrUnsupportedPlatform
 	}
+	return devices, err
+}
+
+// listLinuxScreens 用 xrandr 枚举已连接的显示器（一屏一 X display）。
+func listLinuxScreens() []Device {
+	out, err := exec.Command("xrandr", "--query").Output() //nolint:gosec // 系统命令
+	if err != nil {
+		return nil
+	}
+	var devices []Device
+	for _, line := range strings.Split(string(out), "\n") {
+		// 形如 "eDP-1 connected primary 1920x1080+0+0 ..."
+		if !strings.Contains(line, " connected") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := fields[0]
+		devices = append(devices, Device{
+			Name:   fmt.Sprintf("%s 显示器", name),
+			Source: ":0.0", // x11grab 默认主 display，xrandr 输出名暂映射到 :0
+			Type:   string(config.TypeScreen),
+			Kind:   kindScreen,
+		})
+	}
+	return devices
+}
+
+// listWindowsScreens Windows 屏幕采集选项（gdigrab 只支持 desktop 全虚拟桌面）。
+func listWindowsScreens() []Device {
+	return []Device{{
+		Name:   "主显示器（桌面）",
+		Source: "desktop",
+		Type:   string(config.TypeScreen),
+		Kind:   kindScreen,
+	}}
 }
 
 // DefaultLocalType 返回当前平台的本地摄像头类型（供 UI 手动输入兜底）。

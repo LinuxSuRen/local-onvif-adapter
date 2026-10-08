@@ -34,6 +34,15 @@ type Server struct {
 	// RTSPBaseURL 是取流服务基址（如 rtsp://127.0.0.1:8554），
 	// 启用中的摄像头优先从该服务的流抓帧（设备独占问题，见 captureSnapshot）。
 	RTSPBaseURL string
+
+	// DiscoverySwitch 用于运行时启停 WS-Discovery（main 注入）。
+	DiscoverySwitch DiscoverySwitcher
+}
+
+// DiscoverySwitcher 支持运行时启停 WS-Discovery 的组件。
+type DiscoverySwitcher interface {
+	Start()
+	Stop()
 }
 
 // NewServer 创建管理服务。
@@ -57,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/system", s.handleSystem)
+	mux.HandleFunc("PUT /api/discovery", s.handleToggleDiscovery)
 
 	mux.HandleFunc("GET /api/cameras", s.handleListCameras)
 	mux.HandleFunc("POST /api/cameras", s.handleCreateCamera)
@@ -101,6 +111,33 @@ func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
 		"camera_count":      len(root.Cameras),
 		"profile_count":     enabled,
 	})
+}
+
+// handleToggleDiscovery 运行时启停 WS-Discovery。
+func (s *Server) handleToggleDiscovery(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if err := s.store.Update(func(root *config.Root) error {
+		root.Server.Discovery = req.Enabled
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
+		return
+	}
+	if s.DiscoverySwitch != nil {
+		if req.Enabled {
+			s.DiscoverySwitch.Start()
+		} else {
+			s.DiscoverySwitch.Stop()
+		}
+	}
+	s.logger.Info("ws-discovery toggled", "enabled", req.Enabled)
+	writeData(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
 }
 
 // ---- 摄像头 CRUD ----
