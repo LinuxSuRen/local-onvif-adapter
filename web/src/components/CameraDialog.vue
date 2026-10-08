@@ -94,10 +94,16 @@ const filteredDevices = computed(() => {
   return devices.value.filter((d) => d.kind !== 'screen' && d.type !== 'screen')
 })
 
-// 选择本地设备：类型随设备携带。
+// 选择设备：类型随设备携带。
 function onDeviceChange(source) {
-  const dev = devices.value.find((d) => d.source === source)
-  form.type = dev ? dev.type : defaultLocalType.value
+  const dev = filteredDevices.value.find((d) => d.source === source)
+  if (dev) {
+    form.type = dev.type
+  } else if (mode.value === 'screen') {
+    form.type = 'screen'
+  } else {
+    form.type = defaultLocalType.value
+  }
 }
 
 watch(mode, (m) => {
@@ -120,7 +126,7 @@ const rules = {
       validator: (rule, value, callback) => {
         if (mode.value === 'testsrc') return callback()
         if (!value || !String(value).trim()) {
-          return callback(new Error(mode.value === 'local' ? '请选择摄像头设备' : '请输入源'))
+          return callback(new Error(mode.value === 'local' || mode.value === 'screen' ? '请选择设备' : '请输入源'))
         }
         if (mode.value === 'rtsp' && !String(value).trim().startsWith('rtsp://')) {
           return callback(new Error('RTSP 源必须以 rtsp:// 开头'))
@@ -167,9 +173,9 @@ async function handleSave() {
   }
   // 兜底：本地模式下类型始终跟随设备或平台默认值。
   let type = form.type
-  if (mode.value === 'local') {
-    const dev = devices.value.find((d) => d.source === form.source)
-    type = dev ? dev.type : defaultLocalType.value
+  if (mode.value === 'local' || mode.value === 'screen') {
+    const dev = filteredDevices.value.find((d) => d.source === form.source)
+    type = dev ? dev.type : mode.value === 'screen' ? 'screen' : defaultLocalType.value
   } else {
     type = mode.value
   }
@@ -215,7 +221,7 @@ async function handleSave() {
           </el-radio-button>
         </el-radio-group>
       </el-form-item>
-      <el-form-item v-if="mode === 'local'" label="摄像头" prop="source">
+      <el-form-item v-if="mode === 'local' || mode === 'screen'" :label="mode === 'screen' ? '屏幕' : '摄像头'" prop="source">
         <div class="num-row">
           <el-select
             v-model="form.source"
@@ -224,7 +230,7 @@ async function handleSave() {
             allow-create
             default-first-option
             :loading="devicesLoading"
-            placeholder="选择检测到的摄像头，或直接输入设备源"
+            :placeholder="mode === 'screen' ? '选择要采集的屏幕' : '选择检测到的摄像头，或直接输入设备源'"
             @change="onDeviceChange"
           >
             <el-option v-for="d in filteredDevices" :key="d.source" :label="deviceLabel(d)" :value="d.source" />
@@ -234,9 +240,11 @@ async function handleSave() {
         <div class="form-tip">
           {{ devicesEnumFailed
             ? '设备枚举不可用，请确认 ffmpeg 已安装；也可手动输入设备源'
-            : devices.length === 0 && !devicesLoading
-              ? '未检测到本地摄像头，接入后点刷新；也可手动输入设备源'
-              : '列表为当前主机检测到的内置与 USB 摄像头' }}
+            : mode === 'screen'
+              ? (filteredDevices.length > 0 ? '列表为主机已连接的屏幕，多屏可各自添加为独立摄像头' : '未检测到屏幕，可手动输入源（macOS 填屏幕索引，Linux 填 :0.0，Windows 填 desktop）')
+              : devices.length === 0 && !devicesLoading
+                ? '未检测到本地摄像头，接入后点刷新；也可手动输入设备源'
+                : '列表为当前主机检测到的内置与 USB 摄像头' }}
         </div>
       </el-form-item>
       <el-form-item v-else label="源" prop="source">
