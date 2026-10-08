@@ -32,9 +32,10 @@ const DEFAULT_FORM = {
 const form = reactive({ ...DEFAULT_FORM })
 
 // 用户只选择"来源方式"，平台差异（v4l2/avfoundation/dshow）由设备枚举结果自动携带。
-const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow', 'screen']
+const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow']
 const MODE_OPTIONS = [
   { value: 'local', label: '本地摄像头' },
+  { value: 'screen', label: '屏幕采集' },
   { value: 'rtsp', label: '网络摄像头（RTSP）' },
   { value: 'testsrc', label: '测试彩条' }
 ]
@@ -67,7 +68,7 @@ async function loadDevices(showToast = false) {
 watch(
   () => [props.visible, mode.value],
   ([visible, m]) => {
-    if (visible && m === 'local' && !devicesLoaded) {
+    if (visible && (m === 'local' || m === 'screen') && !devicesLoaded) {
       loadDevices()
     }
   }
@@ -85,6 +86,14 @@ function deviceLabel(d) {
   return k ? `${d.name}（${k}）` : d.name
 }
 
+// 当前模式下可选的设备列表：本地摄像头排除屏幕，屏幕模式只显示屏幕。
+const filteredDevices = computed(() => {
+  if (mode.value === 'screen') {
+    return devices.value.filter((d) => d.kind === 'screen' || d.type === 'screen')
+  }
+  return devices.value.filter((d) => d.kind !== 'screen' && d.type !== 'screen')
+})
+
 // 选择本地设备：类型随设备携带。
 function onDeviceChange(source) {
   const dev = devices.value.find((d) => d.source === source)
@@ -94,6 +103,7 @@ function onDeviceChange(source) {
 watch(mode, (m) => {
   if (m === 'rtsp') form.type = 'rtsp'
   if (m === 'testsrc') form.type = 'testsrc'
+  if (m === 'screen') form.type = 'screen'
   if (m === 'local' && !form.type) form.type = defaultLocalType.value
   nextTick(() => formRef.value && formRef.value.clearValidate('source'))
 })
@@ -217,7 +227,7 @@ async function handleSave() {
             placeholder="选择检测到的摄像头，或直接输入设备源"
             @change="onDeviceChange"
           >
-            <el-option v-for="d in devices" :key="d.source" :label="deviceLabel(d)" :value="d.source" />
+            <el-option v-for="d in filteredDevices" :key="d.source" :label="deviceLabel(d)" :value="d.source" />
           </el-select>
           <el-button class="enum-refresh" :loading="devicesLoading" @click="loadDevices(true)">刷新</el-button>
         </div>
