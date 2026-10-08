@@ -32,7 +32,7 @@ func newTestService(t *testing.T, cams ...config.Camera) *Service {
 func twoCameras() []config.Camera {
 	return []config.Camera{
 		{ID: "cam1", Name: "前门", Type: config.TypeV4L2, Source: "/dev/video0",
-			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048, Enabled: true},
+			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048, PTZ: true, Enabled: true},
 		{ID: "cam2", Name: "热成像", Type: config.TypeTestSrc, Source: "",
 			Width: 640, Height: 512, Framerate: 9, BitrateKBPS: 1024, Infrared: true, Enabled: true},
 	}
@@ -535,5 +535,45 @@ func TestImagingFocusCapabilities(t *testing.T) {
 	body = callOp(t, s, "tptz", "GetServiceCapabilities", "")
 	if !strings.Contains(body, `Zoom="true"`) {
 		t.Fatalf("PTZ capabilities should declare zoom: %s", body)
+	}
+}
+
+// TestPTZNotSupported 验证不支持 PTZ 的摄像头不返回 PTZ 能力。
+func TestPTZNotSupported(t *testing.T) {
+	cams := []config.Camera{
+		{ID: "cam1", Name: "固定枪机", Type: config.TypeTestSrc, Enabled: true},           // 无 PTZ
+		{ID: "cam2", Name: "云台机", Type: config.TypeTestSrc, PTZ: true, Enabled: true}, // 有 PTZ
+	}
+	s := newTestService(t, cams...)
+
+	// Profile 中：cam1 不含 PTZConfiguration，cam2 含。
+	body := callOp(t, s, "trt", "GetProfiles", "")
+	if strings.Contains(body[:strings.Index(body, "cam2")], "PTZConfiguration") {
+		t.Fatal("cam1 (no PTZ) should not have PTZConfiguration in profile")
+	}
+	if !strings.Contains(body[strings.Index(body, "cam2"):], "PTZConfiguration") {
+		t.Fatal("cam2 (PTZ) should have PTZConfiguration in profile")
+	}
+
+	// GetNodes 只返回 cam2 的节点。
+	body = callOp(t, s, "tptz", "GetNodes", "")
+	if got := strings.Count(body, `token="ptznode_`); got != 1 {
+		t.Fatalf("GetNodes should return 1 node (cam2 only), got %d: %s", got, body)
+	}
+
+	// ContinuousMove 在 cam1 上返回 Fault。
+	body = callOp(t, s, "tptz", "ContinuousMove",
+		`<tptz:ProfileToken>profile_cam1</tptz:ProfileToken>`+
+			`<tptz:Velocity><tt:PanTilt x="1" y="0" xmlns:tt="http://www.onvif.org/ver10/schema"/></tptz:Velocity>`)
+	if !strings.Contains(body, "Fault") {
+		t.Fatalf("ContinuousMove on non-PTZ camera should return Fault: %s", body)
+	}
+
+	// ContinuousMove 在 cam2 上正常。
+	body = callOp(t, s, "tptz", "ContinuousMove",
+		`<tptz:ProfileToken>profile_cam2</tptz:ProfileToken>`+
+			`<tptz:Velocity><tt:PanTilt x="1" y="0" xmlns:tt="http://www.onvif.org/ver10/schema"/></tptz:Velocity>`)
+	if !strings.Contains(body, "ContinuousMoveResponse") {
+		t.Fatalf("ContinuousMove on PTZ camera should succeed: %s", body)
 	}
 }

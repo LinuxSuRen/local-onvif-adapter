@@ -168,8 +168,17 @@ func profileXML(v CameraView) string {
 		`<tt:Name>` + xmlEsc(v.ProfileName()) + `</tt:Name>` +
 		videoSourceCfgXML(v, "VideoSourceConfiguration") +
 		videoEncoderCfgXML(v, "VideoEncoderConfiguration") +
-		ptzCfgXML(v) +
+		ptzCfgIfSupported(v) +
 		`</trt:Profiles>`
+}
+
+// ptzCfgIfSupported 仅在摄像头声明支持 PTZ 时才在 profile 中包含 PTZConfiguration。
+// 固定枪机/屏幕采集等不支持的摄像头不返回 PTZ 能力。
+func ptzCfgIfSupported(v CameraView) string {
+	if !v.Camera.PTZ {
+		return ""
+	}
+	return ptzCfgXML(v)
 }
 
 // videoSourceCfgXML 生成视频源配置；元素名按场景区分：
