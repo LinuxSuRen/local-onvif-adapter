@@ -43,7 +43,8 @@ type Camera struct {
 	Height      int        `json:"height"`    // 0 表示自动
 	Framerate   int        `json:"framerate"` // 0 表示默认 15
 	BitrateKBPS int        `json:"bitrate_kbps"`
-	Infrared    bool       `json:"infrared"` // 标记为红外通道，profile 名称会带 infrared
+	Infrared    bool       `json:"infrared"`      // 标记为红外通道，profile 名称会带 infrared
+	PTZ         bool       `json:"ptz_supported"` // 是否支持云台（PTZ）；不支持的摄像头 PTZ 操作返回不支持
 	Enabled     bool       `json:"enabled"`
 }
 
