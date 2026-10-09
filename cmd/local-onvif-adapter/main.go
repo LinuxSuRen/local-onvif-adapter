@@ -332,10 +332,26 @@ func listenWithDrift(addr string, maxAttempts int, logger *slog.Logger) (net.Lis
 		if err == nil {
 			return ln, candidate, i > 0, nil
 		}
-		if !errors.Is(err, syscall.EADDRINUSE) {
+		if !isAddrInUse(err) {
 			return nil, 0, false, fmt.Errorf("listen %s: %w", laddr, err)
 		}
 		logger.Warn("http port busy, drifting to next", "busy", laddr, "next", candidate+1)
 	}
 	return nil, 0, false, fmt.Errorf("ports %d-%d all busy on %s", port, port+maxAttempts-1, host)
+}
+
+// wsaEADDRINUSE 是 Windows 上 bind 冲突的 errno（syscall.WSAEADDRINUSE）。
+// 该常量仅存在于 Windows 的 syscall 包，为保持跨平台编译此处用数值。
+const wsaEADDRINUSE = 10048
+
+// isAddrInUse 判断监听失败是否为端口占用。
+// Windows 上 syscall.EADDRINUSE 是与 WSAEADDRINUSE 不同的占位值，
+// bind 冲突实际返回 WSAEADDRINUSE，因此两类错误都要识别，
+// 否则端口漂移在 Windows 上永远不生效。
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && uintptr(errno) == wsaEADDRINUSE
 }
