@@ -34,7 +34,24 @@
   profile，顺序与配置一致；客户端 `channel N → profile N-1` 的索引映射直接可用
 - 在 UI 里把摄像头标记为"红外"后，profile 名称会带 `infrared` 关键词，
   device-camera-onvif 会按名称自动识别红外通道
-- **鉴权**：ONVIF 侧不校验凭据（digest / WS-Security 头一律放行），避免客户端认证循环
+- **鉴权（可选）**：管理台一键开启设备面认证——ONVIF SOAP 校验 WS-Security UsernameToken
+  （PasswordDigest，`Base64(SHA1(nonce+Created+口令))`，Created ±5 分钟；兼容 PasswordText），
+  RTSP 走 Digest(MD5)+Basic 401 挑战；单一账号两端共用，`GetSystemDateAndTime/GetCapabilities/GetServices`
+  免认证（对时/能力发现前置），管理台与 REST API 不设防；默认关闭，升级零破坏
+
+## 访问认证
+
+管理台「系统信息 → 设备认证」配置（落盘 `data/config.json`，`auth_enabled/auth_user/auth_pass`）：
+
+```bash
+# RTSP 拉流（ffmpeg/VLC/gortsplib 凭 URL userinfo 自动完成 401 重试）
+ffplay rtsp://admin:密码@<本机IP>:8554/cam/<摄像头ID>
+```
+
+- 开启后 ONVIF 客户端（NVR / onvif-ai / device-camera-onvif）在同一处填该账号
+- ffmpeg 推流端由服务自动注入凭证（取流进程随认证变更自动重启）
+- 口令明文存于本地配置文件：RTSP Digest 与 WS-PasswordDigest 的服务端校验
+  都要求明文参与哈希，无法只存摘要
 
 ## 快速开始
 

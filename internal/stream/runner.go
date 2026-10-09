@@ -40,21 +40,23 @@ type Runner struct {
 
 // Manager 管理全部取流进程。
 type Manager struct {
-	mu       sync.Mutex
-	runners  map[string]*Runner
-	pushAddr string
-	bin      string
-	logger   *slog.Logger
+	mu        sync.Mutex
+	runners   map[string]*Runner
+	pushBase  func() string // 每次取流实时求值（认证开关变化时注入/移除 userinfo）
+	lastAddr  string        // 上次使用的推流地址；变化即全部重启
+	bin       string
+	logger    *slog.Logger
 }
 
-// NewManager 创建取流管理器。pushAddr 形如 rtsp://127.0.0.1:8554。
-func NewManager(pushAddr, bin string, logger *slog.Logger) *Manager {
+// NewManager 创建取流管理器。pushBase 返回推流目标（形如 rtsp://127.0.0.1:8554，
+// 认证启用时应携带 userinfo，见 main.go）。
+func NewManager(pushBase func() string, bin string, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
 		runners:  map[string]*Runner{},
-		pushAddr: pushAddr,
+		pushBase: pushBase,
 		bin:      bin,
 		logger:   logger,
 	}
@@ -70,6 +72,17 @@ func Spec(c config.Camera) string {
 func (m *Manager) Sync(cameras []config.Camera) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 推流地址变化（认证开关切换注入/移除 userinfo）：停掉全部进程，
+	// 按新地址重建，避免旧进程以失效凭证反复 401。
+	addr := m.pushBase()
+	if addr != m.lastAddr {
+		for id, r := range m.runners {
+			r.Stop()
+			delete(m.runners, id)
+		}
+		m.lastAddr = addr
+	}
 
 	want := map[string]config.Camera{}
 	for _, c := range cameras {
@@ -94,7 +107,7 @@ func (m *Manager) Sync(cameras []config.Camera) {
 		if _, ok := m.runners[id]; ok {
 			continue
 		}
-		r := newRunner(c, m.pushAddr, m.bin, m.logger)
+		r := newRunner(c, m.pushBase(), m.bin, m.logger)
 		m.runners[id] = r
 		go r.Run()
 	}

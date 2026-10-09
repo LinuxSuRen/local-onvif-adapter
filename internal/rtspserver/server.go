@@ -29,9 +29,15 @@ type pathEntry struct {
 type Server struct {
 	srv    *gortsplib.Server
 	logger *slog.Logger
+	authz  *authorizer
 
 	// PublisherWait 控制读者在发布者未就绪时的等待时长。
 	PublisherWait time.Duration
+
+	// Creds 按请求实时返回生效凭证（返回 ok=false 表示认证关闭）；
+	// 设置后 DESCRIBE/SETUP/PLAY 与 ANNOUNCE 均要求 Basic/Digest 认证，
+	// ffmpeg 推流端需在推流地址注入 userinfo（见 main.go）。
+	Creds func() (user, pass string, ok bool)
 
 	mu     sync.Mutex
 	paths  map[string]*pathEntry
@@ -49,6 +55,12 @@ func New(rtspAddr, udpRTPAddr, udpRTCPAddr string, logger *slog.Logger) *Server 
 		PublisherWait: DefaultPublisherWait,
 		paths:         map[string]*pathEntry{},
 	}
+	s.authz = newAuthorizer(func() (string, string, bool) {
+		if s.Creds == nil {
+			return "", "", false
+		}
+		return s.Creds()
+	})
 	s.srv = &gortsplib.Server{
 		Handler:     s,
 		RTSPAddress: rtspAddr,
@@ -129,6 +141,10 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 
 // OnDescribe 读者描述请求：返回该路径的流；发布者未就绪时等待。
 func (s *Server) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Response, *gortsplib.ServerStream, error) {
+	if !s.authz.verify(ctx.Request) {
+		s.logger.Info("rtsp describe unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
+		return s.authz.challenge(), nil, nil
+	}
 	e := s.lookup(ctx.Path, s.PublisherWait)
 	if e == nil {
 		return &base.Response{StatusCode: base.StatusNotFound}, nil, nil
@@ -139,6 +155,10 @@ func (s *Server) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 
 // OnAnnounce 发布者通告：为路径创建流；已有发布者则踢旧接管（ffmpeg 重启场景）。
 func (s *Server) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
+	if !s.authz.verify(ctx.Request) {
+		s.logger.Info("rtsp announce unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
+		return s.authz.challenge(), nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -168,6 +188,10 @@ func (s *Server) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Re
 
 // OnSetup 会话参数协商：发布者直接放行；读者返回对应路径的流。
 func (s *Server) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
+	if !s.authz.verify(ctx.Request) {
+		s.logger.Info("rtsp setup unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
+		return s.authz.challenge(), nil, nil
+	}
 	if ctx.Session.State() == gortsplib.ServerSessionStatePreRecord {
 		return &base.Response{StatusCode: base.StatusOK}, nil, nil
 	}

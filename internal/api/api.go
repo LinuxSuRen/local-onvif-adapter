@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("PUT /api/discovery", s.handleToggleDiscovery)
+	mux.HandleFunc("PUT /api/auth", s.handleUpdateAuth)
 
 	mux.HandleFunc("GET /api/cameras", s.handleListCameras)
 	mux.HandleFunc("POST /api/cameras", s.handleCreateCamera)
@@ -108,12 +109,45 @@ func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
 		"rtsp_port":         uris.RTSPPort,
 		"onvif_endpoint":    uris.XAddr(),
 		"discovery_enabled": root.Server.Discovery,
+		"auth_enabled":      root.Server.AuthEnabled,
 		"camera_count":      len(root.Cameras),
 		"profile_count":     enabled,
 	})
 }
 
 // handleToggleDiscovery 运行时启停 WS-Discovery。
+// handleUpdateAuth 更新设备面认证（ONVIF SOAP + RTSP 共用账号）。
+// 变更后重启全部取流进程：ffmpeg 推流地址需要按新凭证重建 userinfo。
+func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled  bool   `json:"enabled"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if req.Enabled && (req.Username == "" || req.Password == "") {
+		writeError(w, http.StatusBadRequest, "invalid_args", "开启认证需要填写用户名和密码")
+		return
+	}
+	if err := s.store.Update(func(root *config.Root) error {
+		root.Server.AuthEnabled = req.Enabled
+		root.Server.AuthUser = req.Username
+		root.Server.AuthPass = req.Password
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
+		return
+	}
+	// 推流地址携带的 userinfo 随凭证变化，重启取流进程以新地址重推。
+	root := s.store.Root()
+	s.streams.Sync(root.Cameras)
+	s.logger.Info("device auth updated", "enabled", req.Enabled)
+	writeData(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+}
+
 func (s *Server) handleToggleDiscovery(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
