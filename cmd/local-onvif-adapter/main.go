@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -99,7 +100,7 @@ func main() {
 	// 内嵌 RTSP 服务器（gortsplib，替代 mediamtx）；端口被占时与 HTTP 同款漂移。
 	// 实际端口必须先于 uris 计算，保证 GetStreamUri 宣告的地址正确。
 	rtspPortActual := root.Server.RTSPPort
-	pushAddr := root.Server.RTSPPushAddr
+	pushBase := root.Server.RTSPPushAddr
 	var rtspSrv *rtspserver.Server
 	if root.Server.RTSPEmbedded {
 		rtspSrv, rtspPortActual, err = startEmbeddedRTSP(root.Server.RTSPPort, logger)
@@ -110,7 +111,12 @@ func main() {
 		if rtspPortActual != root.Server.RTSPPort {
 			logger.Warn("rtsp port drifted", "from", root.Server.RTSPPort, "to", rtspPortActual)
 		}
-		pushAddr = fmt.Sprintf("rtsp://127.0.0.1:%d", rtspPortActual)
+		pushBase = fmt.Sprintf("rtsp://127.0.0.1:%d", rtspPortActual)
+		// 设备面认证：凭证按请求实时读取配置（支持运行时开关），
+		// ffmpeg 推流端经 pushBase 注入 userinfo 走同一账号。
+		rtspSrv.Creds = func() (string, string, bool) {
+			return store.Root().Server.AuthCreds()
+		}
 		go func() {
 			if err := rtspSrv.Wait(); err != nil {
 				logger.Error("embedded rtsp server exited", "err", err.Error())
@@ -120,8 +126,22 @@ func main() {
 	}
 	uris := onvifserver.URIs{AdvertiseIP: ip, HTTPPort: httpPort, RTSPPort: rtspPortActual}
 
+	// withCreds 把账号注入推流地址 userinfo（特殊字符自动百分号转义）。
+	withCreds := func(base string) string {
+		user, pass, ok := store.Root().Server.AuthCreds()
+		if !ok {
+			return base
+		}
+		u, err := url.Parse(base)
+		if err != nil || u.Host == "" {
+			return base
+		}
+		u.User = url.UserPassword(user, pass)
+		return u.String()
+	}
+
 	ptzReg := ptzmock.NewRegistry()
-	streams := stream.NewManager(pushAddr, root.Server.FFmpegBin, logger)
+	streams := stream.NewManager(func() string { return withCreds(pushBase) }, root.Server.FFmpegBin, logger)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
 	// ONVIF 客户端修改编码参数后，重启对应取流进程。
@@ -132,7 +152,7 @@ func main() {
 
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
 	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
-	apiSrv.RTSPBaseURL = pushAddr
+	apiSrv.RTSPBaseURL = withCreds(pushBase)
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。

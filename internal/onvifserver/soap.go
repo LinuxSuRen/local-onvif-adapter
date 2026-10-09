@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
-	"io"
-	"net/http"
 )
 
 const envelopeHeader = `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -46,13 +44,10 @@ type soapRequest struct {
 	Inner []byte
 }
 
-// parseSOAPRequest 从 HTTP 请求体解析操作名（Body 首个子元素的 local name）
+// parseSOAPBody 从请求体解析操作名（Body 首个子元素的 local name）
 // 与其 innerxml。兼容带/不带命名空间前缀、带/不带 SOAPAction 头的客户端。
-func parseSOAPRequest(r *http.Request) (*soapRequest, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
+// 请求体由调用方读出后传入（认证校验需要完整信封，避免二次读取）。
+func parseSOAPBody(body []byte) (*soapRequest, error) {
 	var env struct {
 		Body struct {
 			Inner []byte `xml:",innerxml"`

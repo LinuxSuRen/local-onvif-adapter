@@ -1,6 +1,7 @@
 package onvifserver
 
 import (
+	"io"
 	"net/http"
 )
 
@@ -52,8 +53,9 @@ func lookupHandler(ns, op string) (opHandler, bool) {
 }
 
 // Handler 返回 ONVIF SOAP HTTP 处理器。
-// 鉴权策略：不校验任何凭据（digest/WS-Security 头一律忽略并直接放行），
-// 保证各类客户端不因认证问题报错。
+// 鉴权策略：配置开启后校验 WS-Security UsernameToken（digest 优先，
+// 兼容 PasswordText）；对时与能力发现（pre-auth 白名单）放行，
+// 未授权按设备惯例回 HTTP 401；未配置认证时全部放行（默认，向后兼容）。
 func (s *Service) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -61,10 +63,22 @@ func (s *Service) Handler() http.Handler {
 			http.Error(w, "ONVIF service accepts POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		req, err := parseSOAPRequest(r)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			s.logger.Warn("onvif request read failed", "err", err.Error(), "remote", r.RemoteAddr)
+			writeSOAP(w, soapFault("ter:InvalidArgVal", "read SOAP request: "+err.Error()))
+			return
+		}
+		req, err := parseSOAPBody(body)
 		if err != nil {
 			s.logger.Warn("onvif request parse failed", "err", err.Error(), "remote", r.RemoteAddr)
 			writeSOAP(w, soapFault("ter:InvalidArgVal", "malformed SOAP request: "+err.Error()))
+			return
+		}
+		if user, pass, ok := s.store.Root().Server.AuthCreds(); ok &&
+			!preAuthOps[req.Op] && !verifyUsernameToken(body, user, pass) {
+			s.logger.Info("onvif op unauthorized", "op", req.Op, "remote", r.RemoteAddr)
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		handler, ok := lookupHandler(req.NS, req.Op)
@@ -73,14 +87,14 @@ func (s *Service) Handler() http.Handler {
 			writeSOAP(w, soapFault("ter:ActionNotSupported", "operation "+req.Op+" is not supported"))
 			return
 		}
-		body, err := handler(s, req.Inner)
+		respBody, err := handler(s, req.Inner)
 		if err != nil {
 			s.logger.Warn("onvif op failed", "op", req.Op, "err", err.Error())
 			writeSOAP(w, soapFault("ter:ActionNotSupported", "operation "+req.Op+" failed: "+err.Error()))
 			return
 		}
 		s.logger.Debug("onvif op handled", "op", req.Op, "remote", r.RemoteAddr)
-		writeSOAP(w, soapEnvelope(body))
+		writeSOAP(w, soapEnvelope(respBody))
 	})
 }
 
