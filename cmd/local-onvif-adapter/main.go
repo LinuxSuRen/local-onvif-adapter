@@ -64,11 +64,16 @@ func main() {
 
 	// 配置中的服务参数优先级低于命令行显式指定；此处采用简单策略：
 	// 命令行/环境变量值写回配置，使其成为唯一事实来源。
+	// 例外：RTSP 端口仅在 flag 或环境变量显式指定时才覆盖配置——
+	// 否则保留配置文件中的值，使 PUT /api/rtsp-port 的修改重启后仍生效。
+	rtspPortExplicit := flagExplicit(flag.CommandLine, "rtsp-port") || os.Getenv("RTSP_PORT") != ""
 	if err := store.Update(func(r *config.Root) error {
 		r.Server.HTTPAddr = *httpAddr
 		r.Server.AdvertiseIP = *advertiseIP
 		r.Server.RTSPPushAddr = *rtspPush
-		r.Server.RTSPPort = *rtspPort
+		if rtspPortExplicit {
+			r.Server.RTSPPort = *rtspPort
+		}
 		r.Server.RTSPEmbedded = *rtspServer
 		r.Server.FFmpegBin = *ffmpegBin
 		r.Server.Discovery = *discoveryOn
@@ -244,6 +249,17 @@ func udpPortsFree(ports ...int) bool {
 		_ = conn.Close()
 	}
 	return true
+}
+
+// flagExplicit 判断某个命令行参数是否被显式指定（而非取默认值）。
+func flagExplicit(fs *flag.FlagSet, name string) bool {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			explicit = true
+		}
+	})
+	return explicit
 }
 
 func envOr(key, def string) string {

@@ -1,13 +1,54 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { updateDiscovery } from '../api'
+import { updateDiscovery, updateRtspPort } from '../api'
 
 const props = defineProps({
   system: { type: Object, default: null }
 })
 const emit = defineEmits(['updated'])
 const switching = ref(false)
+
+const rtspConfigured = computed(() =>
+  props.system && props.system.rtsp_port_configured != null
+    ? props.system.rtsp_port_configured
+    : props.system && props.system.rtsp_port
+)
+// 配置端口与实际监听端口不一致时提示待重启（端口漂移或修改未生效）。
+const rtspPending = computed(() => {
+  if (!props.system) return false
+  const cfg = props.system.rtsp_port_configured
+  return cfg != null && cfg !== props.system.rtsp_port
+})
+
+const portDialogVisible = ref(false)
+const portInput = ref(8554)
+const portSaving = ref(false)
+
+function openPortDialog() {
+  portInput.value = rtspConfigured.value || 8554
+  portDialogVisible.value = true
+}
+
+async function savePort() {
+  if (!portInput.value || portInput.value < 1 || portInput.value > 65535) {
+    ElMessage.warning('RTSP 端口取值范围 1-65535')
+    return
+  }
+  portSaving.value = true
+  try {
+    const res = await updateRtspPort(portInput.value)
+    ElMessage.success(
+      res && res.restart_required ? 'RTSP 端口已保存，重启服务后生效' : 'RTSP 端口已保存'
+    )
+    portDialogVisible.value = false
+    emit('updated')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    portSaving.value = false
+  }
+}
 
 async function copyEndpoint() {
   const text = props.system && props.system.onvif_endpoint
@@ -47,7 +88,20 @@ async function onToggleDiscovery(val) {
         </el-button>
       </el-descriptions-item>
       <el-descriptions-item label="RTSP 端口">
-        {{ system && system.rtsp_port != null ? system.rtsp_port : '—' }}
+        <span>{{ system && system.rtsp_port != null ? system.rtsp_port : '—' }}</span>
+        <el-tag v-if="rtspPending" size="small" type="warning" class="port-pending">
+          已配置 {{ system.rtsp_port_configured }}，重启后生效
+        </el-tag>
+        <el-button
+          v-if="system"
+          size="small"
+          text
+          type="primary"
+          class="copy-btn"
+          @click="openPortDialog"
+        >
+          <el-icon><Edit /></el-icon>修改
+        </el-button>
       </el-descriptions-item>
       <el-descriptions-item label="对外 IP">
         {{ system && system.advertise_ip ? system.advertise_ip : '—' }}
@@ -76,6 +130,31 @@ async function onToggleDiscovery(val) {
         {{ system && system.profile_count != null ? system.profile_count : '—' }}
       </el-descriptions-item>
     </el-descriptions>
+
+    <el-dialog
+      v-model="portDialogVisible"
+      title="修改 RTSP 端口"
+      width="420px"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item label="RTSP 端口">
+          <el-input-number
+            v-model="portInput"
+            :min="1"
+            :max="65535"
+            :step="1"
+            step-strictly
+            controls-position="right"
+            style="width: 200px"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="portDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="portSaving" @click="savePort">保存</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -87,6 +166,9 @@ async function onToggleDiscovery(val) {
   word-break: break-all;
 }
 .copy-btn {
+  margin-left: 8px;
+}
+.port-pending {
   margin-left: 8px;
 }
 .gh-link {
