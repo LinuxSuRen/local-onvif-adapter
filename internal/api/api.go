@@ -196,7 +196,6 @@ type cameraInput struct {
 	Framerate   *int   `json:"framerate"`
 	BitrateKBPS *int   `json:"bitrate_kbps"`
 	Infrared    *bool  `json:"infrared"`
-	PTZ         *bool  `json:"ptz_supported"`
 	Enabled     *bool  `json:"enabled"`
 }
 
@@ -340,9 +339,6 @@ func applyInput(cam *config.Camera, in *cameraInput) {
 	}
 	if in.Infrared != nil {
 		cam.Infrared = *in.Infrared
-	}
-	if in.PTZ != nil {
-		cam.PTZ = *in.PTZ
 	}
 	if in.Enabled != nil {
 		cam.Enabled = *in.Enabled

@@ -26,7 +26,6 @@ const DEFAULT_FORM = {
   framerate: 15,
   bitrate_kbps: 2048,
   infrared: false,
-  ptz: false,
   enabled: true
 }
 
@@ -164,7 +163,6 @@ watch(
         framerate: c.framerate != null ? c.framerate : 15,
         bitrate_kbps: c.bitrate_kbps != null ? c.bitrate_kbps : 2048,
         infrared: !!c.infrared,
-        ptz: !!c.ptz_supported,
         enabled: !!c.enabled
       })
       mode.value = LOCAL_TYPES.includes(c.type) ? 'local' : c.type || 'local'
@@ -201,7 +199,6 @@ async function handleSave() {
     framerate: form.framerate,
     bitrate_kbps: form.bitrate_kbps,
     infrared: form.infrared,
-    ptz_supported: form.ptz,
     enabled: form.enabled
   }
   try {
@@ -287,10 +284,6 @@ async function handleSave() {
       <el-form-item label="红外">
         <el-switch v-model="form.infrared" />
         <div class="form-tip">标记为红外通道后，ONVIF profile 名称会带 infrared，客户端可自动识别</div>
-      </el-form-item>
-      <el-form-item label="云台">
-        <el-switch v-model="form.ptz" />
-        <div class="form-tip">仅支持云台转动的摄像头开启；固定枪机/屏幕采集等不开</div>
       </el-form-item>
       <el-form-item label="启用">
         <el-switch v-model="form.enabled" />

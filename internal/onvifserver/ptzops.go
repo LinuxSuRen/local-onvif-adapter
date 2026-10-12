@@ -82,10 +82,7 @@ func withProfileTokenPTZ(fn func(s *Service, v CameraView, req ptzReq) (string, 
 			s.logger.Debug("ptz op on unknown profile, ignored", "profile", req.ProfileToken)
 			return `<tptz:Response/>`, nil
 		}
-		// 摄像头不支持 PTZ 时返回 Fault（客户端据此判断设备无云台）。
-		if !v.Camera.PTZ {
-			return "", fmt.Errorf("camera %q does not support PTZ", v.Camera.Name)
-		}
+		// 所有摄像头默认提供 mock 级 PTZ（虚拟状态机），客户端调用永不报 Fault。
 		return fn(s, v, req)
 	}
 }
@@ -127,9 +124,6 @@ func withPTZCfgToken(fn func(s *Service, v CameraView) (string, error)) opHandle
 func opGetNodes(s *Service, _ []byte) (string, error) {
 	body := `<tptz:GetNodesResponse>`
 	for _, v := range s.EnabledViews() {
-		if !v.Camera.PTZ {
-			continue
-		}
 		body += ptzNodeXML(v)
 	}
 	return body + `</tptz:GetNodesResponse>`, nil
@@ -177,9 +171,6 @@ func ptzCfgXML(v CameraView) string {
 func opGetConfigurations(s *Service, _ []byte) (string, error) {
 	body := `<tptz:GetConfigurationsResponse>`
 	for _, v := range s.EnabledViews() {
-		if !v.Camera.PTZ {
-			continue
-		}
 		body += ptzCfgXML(v)
 	}
 	return body + `</tptz:GetConfigurationsResponse>`, nil

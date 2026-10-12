@@ -32,7 +32,7 @@ func newTestService(t *testing.T, cams ...config.Camera) *Service {
 func twoCameras() []config.Camera {
 	return []config.Camera{
 		{ID: "cam1", Name: "前门", Type: config.TypeV4L2, Source: "/dev/video0",
-			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048, PTZ: true, Enabled: true},
+			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048, Enabled: true},
 		{ID: "cam2", Name: "热成像", Type: config.TypeTestSrc, Source: "",
 			Width: 640, Height: 512, Framerate: 9, BitrateKBPS: 1024, Infrared: true, Enabled: true},
 	}
@@ -538,42 +538,45 @@ func TestImagingFocusCapabilities(t *testing.T) {
 	}
 }
 
-// TestPTZNotSupported 验证不支持 PTZ 的摄像头不返回 PTZ 能力。
-func TestPTZNotSupported(t *testing.T) {
+// TestPTZAlwaysProvided 验证所有摄像头（含固定枪机）默认提供 mock 级 PTZ：
+// profile 含 PTZConfiguration、GetNodes 全量返回、任何 PTZ 操作都不报 Fault。
+// 客户端（如预置位到位等待轮询 GetStatus）遇到 Fault 会直接报错，属硬性兼容要求。
+func TestPTZAlwaysProvided(t *testing.T) {
 	cams := []config.Camera{
-		{ID: "cam1", Name: "固定枪机", Type: config.TypeTestSrc, Enabled: true},           // 无 PTZ
-		{ID: "cam2", Name: "云台机", Type: config.TypeTestSrc, PTZ: true, Enabled: true}, // 有 PTZ
+		{ID: "cam1", Name: "固定枪机", Type: config.TypeTestSrc, Enabled: true},
+		{ID: "cam2", Name: "云台机", Type: config.TypeTestSrc, Enabled: true},
 	}
 	s := newTestService(t, cams...)
 
-	// Profile 中：cam1 不含 PTZConfiguration，cam2 含。
+	// Profile 中：所有摄像头都含 PTZConfiguration。
 	body := callOp(t, s, "trt", "GetProfiles", "")
-	if strings.Contains(body[:strings.Index(body, "cam2")], "PTZConfiguration") {
-		t.Fatal("cam1 (no PTZ) should not have PTZConfiguration in profile")
-	}
-	if !strings.Contains(body[strings.Index(body, "cam2"):], "PTZConfiguration") {
-		t.Fatal("cam2 (PTZ) should have PTZConfiguration in profile")
+	for _, id := range []string{"cam1", "cam2"} {
+		seg := body
+		if idx := strings.Index(body, "profile_"+id); idx >= 0 {
+			seg = body[idx:]
+		}
+		if !strings.Contains(seg, "PTZConfiguration") {
+			t.Fatalf("profile %s should have PTZConfiguration: %s", id, seg)
+		}
 	}
 
-	// GetNodes 只返回 cam2 的节点。
+	// GetNodes 返回全部节点。
 	body = callOp(t, s, "tptz", "GetNodes", "")
-	if got := strings.Count(body, `token="ptznode_`); got != 1 {
-		t.Fatalf("GetNodes should return 1 node (cam2 only), got %d: %s", got, body)
+	if got := strings.Count(body, `token="ptznode_`); got != 2 {
+		t.Fatalf("GetNodes should return 2 nodes, got %d: %s", got, body)
 	}
 
-	// ContinuousMove 在 cam1 上返回 Fault。
-	body = callOp(t, s, "tptz", "ContinuousMove",
-		`<tptz:ProfileToken>profile_cam1</tptz:ProfileToken>`+
-			`<tptz:Velocity><tt:PanTilt x="1" y="0" xmlns:tt="http://www.onvif.org/ver10/schema"/></tptz:Velocity>`)
-	if !strings.Contains(body, "Fault") {
-		t.Fatalf("ContinuousMove on non-PTZ camera should return Fault: %s", body)
-	}
-
-	// ContinuousMove 在 cam2 上正常。
-	body = callOp(t, s, "tptz", "ContinuousMove",
-		`<tptz:ProfileToken>profile_cam2</tptz:ProfileToken>`+
-			`<tptz:Velocity><tt:PanTilt x="1" y="0" xmlns:tt="http://www.onvif.org/ver10/schema"/></tptz:Velocity>`)
-	if !strings.Contains(body, "ContinuousMoveResponse") {
-		t.Fatalf("ContinuousMove on PTZ camera should succeed: %s", body)
+	// GetStatus / ContinuousMove 在固定枪机上同样成功（无 Fault）。
+	for _, id := range []string{"cam1", "cam2"} {
+		body = callOp(t, s, "tptz", "GetStatus", `<tptz:ProfileToken>profile_`+id+`</tptz:ProfileToken>`)
+		if !strings.Contains(body, "GetStatusResponse") || strings.Contains(body, "Fault") {
+			t.Fatalf("GetStatus on %s should succeed without Fault: %s", id, body)
+		}
+		body = callOp(t, s, "tptz", "ContinuousMove",
+			`<tptz:ProfileToken>profile_`+id+`</tptz:ProfileToken>`+
+				`<tptz:Velocity><tt:PanTilt x="1" y="0" xmlns:tt="http://www.onvif.org/ver10/schema"/></tptz:Velocity>`)
+		if !strings.Contains(body, "ContinuousMoveResponse") || strings.Contains(body, "Fault") {
+			t.Fatalf("ContinuousMove on %s should succeed without Fault: %s", id, body)
+		}
 	}
 }
