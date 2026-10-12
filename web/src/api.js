@@ -101,3 +101,7 @@ export function updateDiscovery(enabled) {
 export function updateRtspPort(port) {
   return request('/api/rtsp-port', { method: 'PUT', body: { rtsp_port: port } })
 }
+
+export function updateAuth(enabled, username, password) {
+  return request('/api/auth', { method: 'PUT', body: { enabled, username, password } })
+}

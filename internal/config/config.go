@@ -73,6 +73,20 @@ type Server struct {
 	RTSPEmbedded bool   `json:"rtsp_embedded"`  // 是否启用内嵌 RTSP 服务器（默认 true）
 	FFmpegBin    string `json:"ffmpeg_bin"`
 	Discovery    bool   `json:"discovery"` // 是否开启 WS-Discovery
+	// 设备面认证（ONVIF SOAP + RTSP），管理台/API 不设防；单一账号。
+	// 口令明文存配置文件：RTSP Digest 与 WS-PasswordDigest 的服务端
+	// 校验都要求明文参与哈希，无法只存摘要。
+	AuthEnabled bool   `json:"auth_enabled"`
+	AuthUser    string `json:"auth_user"`
+	AuthPass    string `json:"auth_pass"`
+}
+
+// AuthCreds 返回生效的认证凭证；未启用返回 ok=false。
+func (s Server) AuthCreds() (user, pass string, ok bool) {
+	if !s.AuthEnabled || s.AuthUser == "" || s.AuthPass == "" {
+		return "", "", false
+	}
+	return s.AuthUser, s.AuthPass, true
 }
 
 // Root 配置文件根节点。
