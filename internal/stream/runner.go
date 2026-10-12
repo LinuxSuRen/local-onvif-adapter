@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -315,11 +316,20 @@ func InputArgs(c config.Camera) []string {
 
 // screenInputArgs 按平台构造屏幕采集的 ffmpeg 输入参数：
 //   - macOS：用包装脚本持续 screencapture → ffmpeg image2pipe（绕开 avfoundation 权限问题）
-//   - Linux：source 为 X display（如 ":0.0"，一屏一源）
-//   - Windows：source 为 desktop（gdigrab 主屏）或 title=窗口名
+//   - Linux：source 为 X display（":0.0" 全屏或 ":0.0+X,Y@WxH" 指定显示器）
+//   - Windows：source 为 desktop（全虚拟桌面）、desktop@X,Y,WxH（指定显示器）
+//     或 title=窗口名
 func screenInputArgs(c config.Camera) []string {
 	return screenInputArgsFor(runtime.GOOS, c)
 }
+
+// monitorRectRe 匹配 Windows 显示器矩形 source："desktop@X,Y,WxH"
+// （X/Y 为虚拟桌面坐标，可为负；W/H 为该显示器尺寸）。
+var monitorRectRe = regexp.MustCompile(`^desktop@(-?\d+),(-?\d+),(\d+)x(\d+)$`)
+
+// x11ScreenRectRe 匹配 Linux 显示器 source：":0.0+X,Y@WxH"
+// （x11grab 原生支持 display 偏移 +X,Y；@WxH 为本程序附加的期望尺寸）。
+var x11ScreenRectRe = regexp.MustCompile(`^(:[0-9.]+(?:\+\d+,\d+)?)@(\d+)x(\d+)$`)
 
 // screenInputArgsFor 按指定 GOOS 构造参数（goos 参数仅为可测试性）。
 func screenInputArgsFor(goos string, c config.Camera) []string {
@@ -334,12 +344,22 @@ func screenInputArgsFor(goos string, c config.Camera) []string {
 		if fps > 0 {
 			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
 		}
-		if c.Width > 0 && c.Height > 0 {
-			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
-		}
 		src := strings.TrimSpace(c.Source)
 		if src == "" {
 			src = "desktop"
+		}
+		// 指定显示器：desktop@X,Y,WxH → 虚拟桌面坐标偏移 + 按显示器尺寸裁剪。
+		// 用户显式配置了分辨率时以用户值为准（在显示器内裁剪）。
+		if m := monitorRectRe.FindStringSubmatch(src); m != nil {
+			args = append(args, "-offset_x", m[1], "-offset_y", m[2])
+			if c.Width <= 0 || c.Height <= 0 {
+				args = append(args, "-video_size", m[3]+"x"+m[4])
+			} else {
+				args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+			}
+			src = "desktop"
+		} else if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
 		}
 		args = append(args, "-i", src)
 	default: // linux（x11grab）
@@ -347,12 +367,20 @@ func screenInputArgsFor(goos string, c config.Camera) []string {
 		if fps > 0 {
 			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
 		}
-		if c.Width > 0 && c.Height > 0 {
-			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
-		}
 		src := strings.TrimSpace(c.Source)
 		if src == "" {
 			src = ":0.0"
+		}
+		// 指定显示器：":0.0+X,Y@WxH" → display 偏移采集，尺寸默认取显示器矩形。
+		if m := x11ScreenRectRe.FindStringSubmatch(src); m != nil {
+			src = m[1]
+			if c.Width <= 0 || c.Height <= 0 {
+				args = append(args, "-video_size", m[2]+"x"+m[3])
+			} else {
+				args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+			}
+		} else if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
 		}
 		args = append(args, "-i", src)
 	}

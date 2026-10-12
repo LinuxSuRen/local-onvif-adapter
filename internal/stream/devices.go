@@ -57,14 +57,24 @@ func ListLocalVideoDevices(ffmpegBin string) ([]Device, error) {
 	return devices, err
 }
 
-// listLinuxScreens 用 xrandr 枚举已连接的显示器（一屏一 X display）。
+// listLinuxScreens 用 xrandr 枚举已连接的显示器，解析行内几何信息
+// （形如 "eDP-1 connected primary 1920x1080+0+0"）生成按屏采集源：
+// ":0.0+X,Y@WxH"（x11grab 原生偏移 + 期望尺寸）。
 func listLinuxScreens() []Device {
 	out, err := exec.Command("xrandr", "--query").Output() //nolint:gosec // 系统命令
 	if err != nil {
 		return nil
 	}
+	return parseXrandrScreens(string(out))
+}
+
+// xrandrGeoRe 匹配 xrandr 已连接行内的当前模式几何 "WxH+X+Y"。
+var xrandrGeoRe = regexp.MustCompile(`(\d+)x(\d+)\+(-?\d+)\+(-?\d+)`)
+
+// parseXrandrScreens 解析 xrandr --query 输出（拆出便于测试）。
+func parseXrandrScreens(out string) []Device {
 	var devices []Device
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		// 形如 "eDP-1 connected primary 1920x1080+0+0 ..."
 		if !strings.Contains(line, " connected") {
 			continue
@@ -74,9 +84,16 @@ func listLinuxScreens() []Device {
 			continue
 		}
 		name := fields[0]
+		src := ":0.0"
+		if m := xrandrGeoRe.FindStringSubmatch(line); m != nil {
+			src = fmt.Sprintf(":0.0+%s,%s@%sx%s", m[3], m[4], m[1], m[2])
+			name = fmt.Sprintf("%s 显示器（%s×%s）", name, m[1], m[2])
+		} else {
+			name = fmt.Sprintf("%s 显示器", name)
+		}
 		devices = append(devices, Device{
-			Name:   fmt.Sprintf("%s 显示器", name),
-			Source: ":0.0", // x11grab 默认主 display，xrandr 输出名暂映射到 :0
+			Name:   name,
+			Source: src,
 			Type:   string(config.TypeScreen),
 			Kind:   kindScreen,
 		})
@@ -84,14 +101,18 @@ func listLinuxScreens() []Device {
 	return devices
 }
 
-// listWindowsScreens Windows 屏幕采集选项（gdigrab 只支持 desktop 全虚拟桌面）。
+// listWindowsScreens Windows 屏幕采集选项：
+//   - 首项为整个虚拟桌面（所有显示器拼接，等价 legacy "desktop"）；
+//   - 其后逐显示器一项，Source 形如 "desktop@X,Y,WxH"（虚拟桌面坐标矩形），
+//     由 InputArgs 转成 gdigrab 的 -offset_x/-offset_y/-video_size 按屏裁剪。
 func listWindowsScreens() []Device {
-	return []Device{{
-		Name:   "主显示器（桌面）",
+	devices := []Device{{
+		Name:   "整个桌面（全部显示器拼接）",
 		Source: "desktop",
 		Type:   string(config.TypeScreen),
 		Kind:   kindScreen,
 	}}
+	return append(devices, enumMonitorDevices()...)
 }
 
 // DefaultLocalType 返回当前平台的本地摄像头类型（供 UI 手动输入兜底）。
