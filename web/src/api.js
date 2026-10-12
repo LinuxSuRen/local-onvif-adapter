@@ -97,3 +97,7 @@ export function listDevices() {
 export function updateDiscovery(enabled) {
   return request('/api/discovery', { method: 'PUT', body: { enabled } })
 }
+
+export function updateRtspPort(port) {
+  return request('/api/rtsp-port', { method: 'PUT', body: { rtsp_port: port } })
+}

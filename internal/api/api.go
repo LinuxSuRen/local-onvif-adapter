@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("PUT /api/discovery", s.handleToggleDiscovery)
+	mux.HandleFunc("PUT /api/rtsp-port", s.handleUpdateRTSPPort)
 
 	mux.HandleFunc("GET /api/cameras", s.handleListCameras)
 	mux.HandleFunc("POST /api/cameras", s.handleCreateCamera)
@@ -102,14 +103,44 @@ func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"version":           s.version,
-		"advertise_ip":      uris.AdvertiseIP,
-		"http_port":         uris.HTTPPort,
-		"rtsp_port":         uris.RTSPPort,
-		"onvif_endpoint":    uris.XAddr(),
-		"discovery_enabled": root.Server.Discovery,
-		"camera_count":      len(root.Cameras),
-		"profile_count":     enabled,
+		"version":              s.version,
+		"advertise_ip":         uris.AdvertiseIP,
+		"http_port":            uris.HTTPPort,
+		"rtsp_port":            uris.RTSPPort,
+		"rtsp_port_configured": root.Server.RTSPPort,
+		"onvif_endpoint":       uris.XAddr(),
+		"discovery_enabled":    root.Server.Discovery,
+		"camera_count":         len(root.Cameras),
+		"profile_count":        enabled,
+	})
+}
+
+// handleUpdateRTSPPort 修改 RTSP 端口：持久化到配置文件，重启服务后生效。
+// 当前实际监听端口（含端口漂移）不受影响；两者不一致时 UI 提示待重启。
+func (s *Server) handleUpdateRTSPPort(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RTSPPort int `json:"rtsp_port"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if req.RTSPPort < 1 || req.RTSPPort > 65535 {
+		writeError(w, http.StatusBadRequest, "invalid_argument", "RTSP 端口取值范围 1-65535")
+		return
+	}
+	if err := s.store.Update(func(root *config.Root) error {
+		root.Server.RTSPPort = req.RTSPPort
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
+		return
+	}
+	restartRequired := req.RTSPPort != s.onvif.URIs().RTSPPort
+	s.logger.Info("rtsp port updated", "port", req.RTSPPort, "restart_required", restartRequired)
+	writeData(w, http.StatusOK, map[string]any{
+		"rtsp_port":        req.RTSPPort,
+		"restart_required": restartRequired,
 	})
 }
 

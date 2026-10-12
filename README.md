@@ -116,7 +116,8 @@ make lint      # go vet
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/system` | 系统/ONVIF 端点信息 |
+| GET | `/api/system` | 系统/ONVIF 端点信息（`rtsp_port` 为实际监听端口，`rtsp_port_configured` 为配置端口） |
+| PUT | `/api/rtsp-port` | 修改 RTSP 端口（body `{"rtsp_port": 8554}`，持久化到配置，重启服务后生效） |
 | GET / POST | `/api/cameras` | 列表 / 新增 |
 | PUT / DELETE | `/api/cameras/{id}` | 更新 / 删除 |
 | GET | `/api/cameras/{id}/snapshot` | 抓拍 JPEG |
@@ -166,11 +167,25 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 | `--advertise-ip` | `ADVERTISE_IP` | 自动探测 | 对外宣告 IP |
 | `--rtsp-server` | `RTSP_SERVER` | `true` | 启用内嵌 RTSP 服务器（gortsplib） |
 | `--rtsp-push` | `RTSP_PUSH` | `rtsp://127.0.0.1:8554` | ffmpeg 推流目标（仅 `--rtsp-server=false` 时使用，指向外部 mediamtx） |
-| `--rtsp-port` | `RTSP_PORT` | `8554` | RTSP 端口（内嵌服务器监听 + 对外宣告） |
+| `--rtsp-port` | `RTSP_PORT` | `8554` | RTSP 端口（内嵌服务器监听 + 对外宣告）；仅显式指定时覆盖配置文件中的值，详见 [修改 RTSP 端口](#修改-rtsp-端口) |
 | `--data-dir` | `DATA_DIR` | `./data` | 配置持久化目录 |
 | `--ffmpeg-bin` | `FFMPEG_BIN` | `ffmpeg` | ffmpeg 路径 |
 | `--discovery` | `DISCOVERY` | `true` | 是否开启 WS-Discovery |
 | `--log-level` | `LOG_LEVEL` | `info` | 日志级别 |
+
+### 修改 RTSP 端口
+
+RTSP 端口支持三种修改途径，优先级从高到低：
+
+1. **命令行** `--rtsp-port=9554`（仅显式指定时覆盖配置）
+2. **环境变量** `RTSP_PORT=9554`
+3. **配置文件 / 管理 API**：UI「系统信息 → RTSP 端口 → 修改」或 `PUT /api/rtsp-port`，
+   持久化到 `data/config.json` 的 `server.rtsp_port`
+
+通过 API/UI 修改后**需重启服务生效**：运行中的 RTSP 监听（含漂移后的实际端口）不会变化，
+`GET /api/system` 会同时返回实际端口（`rtsp_port`）与配置端口（`rtsp_port_configured`），
+两者不一致时 UI 会提示"已配置 xx，重启后生效"。未显式指定 `--rtsp-port`/`RTSP_PORT` 的
+重启不会覆盖配置文件中的端口。
 
 ### 端口漂移
 

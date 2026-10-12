@@ -88,7 +88,7 @@ async function handleRemove(camera) {
       </a>
     </header>
 
-    <SystemCard :system="system" class="block" />
+    <SystemCard :system="system" class="block" @updated="loadAll" />
 
     <CameraTable
       class="block"

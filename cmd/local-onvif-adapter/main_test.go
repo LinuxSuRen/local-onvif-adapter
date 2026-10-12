@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"io"
 	"log/slog"
 	"net"
@@ -110,5 +111,34 @@ func TestListenWithDriftWildcardHost(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	if got != port || drifted {
 		t.Fatalf("wildcard host: got %d drifted=%v", got, drifted)
+	}
+}
+
+func TestFlagExplicit(t *testing.T) {
+	// 未显式指定：flag 取默认值时不算显式。
+	fs := flag.NewFlagSet("t1", flag.ContinueOnError)
+	fs.Int("rtsp-port", 8554, "")
+	fs.String("http-addr", ":8080", "")
+	if err := fs.Parse([]string{"--http-addr=:9090"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if flagExplicit(fs, "rtsp-port") {
+		t.Fatal("rtsp-port 未显式指定")
+	}
+	if !flagExplicit(fs, "http-addr") {
+		t.Fatal("http-addr 已显式指定")
+	}
+
+	// 显式指定：命令行出现该 flag 才算显式。
+	fs2 := flag.NewFlagSet("t2", flag.ContinueOnError)
+	fs2.Int("rtsp-port", 8554, "")
+	if err := fs2.Parse([]string{"--rtsp-port=9554"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !flagExplicit(fs2, "rtsp-port") {
+		t.Fatal("rtsp-port 已显式指定")
+	}
+	if got := fs2.Lookup("rtsp-port").Value.String(); got != "9554" {
+		t.Fatalf("显式值应为 9554，实际 %s", got)
 	}
 }

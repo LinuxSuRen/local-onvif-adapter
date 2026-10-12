@@ -69,6 +69,57 @@ func TestSystemEndpoint(t *testing.T) {
 	if data["rtsp_port"].(float64) != 8554 {
 		t.Fatalf("rtsp port: %v", data["rtsp_port"])
 	}
+	if data["rtsp_port_configured"].(float64) != 8554 {
+		t.Fatalf("rtsp port configured: %v", data["rtsp_port_configured"])
+	}
+}
+
+func TestUpdateRTSPPort(t *testing.T) {
+	_, ts := newTestServer(t)
+	// 合法修改：与实际监听端口不同 → 需重启生效。
+	code, out := doJSON(t, "PUT", ts.URL+"/api/rtsp-port", `{"rtsp_port":9554}`)
+	if code != 200 {
+		t.Fatalf("update: %d %v", code, out)
+	}
+	data := out["data"].(map[string]any)
+	if data["rtsp_port"].(float64) != 9554 {
+		t.Fatalf("port: %v", data["rtsp_port"])
+	}
+	if !data["restart_required"].(bool) {
+		t.Fatal("端口变化应提示重启生效")
+	}
+	// /api/system 应返回配置端口与实际端口的区分。
+	code, out = doJSON(t, "GET", ts.URL+"/api/system", "")
+	if code != 200 {
+		t.Fatalf("system: %d", code)
+	}
+	data = out["data"].(map[string]any)
+	if data["rtsp_port"].(float64) != 8554 {
+		t.Fatalf("实际端口不应变化: %v", data["rtsp_port"])
+	}
+	if data["rtsp_port_configured"].(float64) != 9554 {
+		t.Fatalf("配置端口: %v", data["rtsp_port_configured"])
+	}
+	// 改回实际端口 → 无需重启。
+	code, out = doJSON(t, "PUT", ts.URL+"/api/rtsp-port", `{"rtsp_port":8554}`)
+	if code != 200 {
+		t.Fatalf("revert: %d %v", code, out)
+	}
+	if out["data"].(map[string]any)["restart_required"].(bool) {
+		t.Fatal("与实际端口一致不应提示重启")
+	}
+	// 非法端口。
+	for _, bad := range []string{`{"rtsp_port":0}`, `{"rtsp_port":-1}`, `{"rtsp_port":65536}`, `{"rtsp_port":"x"}`} {
+		code, _ = doJSON(t, "PUT", ts.URL+"/api/rtsp-port", bad)
+		if code != 400 {
+			t.Fatalf("非法端口 %s 应返回 400，实际 %d", bad, code)
+		}
+	}
+	// 空请求体。
+	code, _ = doJSON(t, "PUT", ts.URL+"/api/rtsp-port", "")
+	if code != 400 {
+		t.Fatalf("空请求体应返回 400，实际 %d", code)
+	}
 }
 
 func TestCameraCRUD(t *testing.T) {
