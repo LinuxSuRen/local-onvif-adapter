@@ -27,6 +27,12 @@ type Device struct {
 	Source string `json:"source"` // ffmpeg 输入源：v4l2 设备路径 / avfoundation 索引 / dshow 设备名
 	Type   string `json:"type"`   // 摄像头类型：v4l2 | avfoundation | dshow
 	Kind   string `json:"kind"`   // builtin | usb | unknown（尽力识别，仅用于展示）
+	// AltSource 是设备的稳定唯一标识（当前仅 Windows dshow 填充）：DirectShow
+	// 的 PnP 别名（@device_pnp_\\?\usb#vid_...&pid_...）。同型号多台摄像头的
+	// 友好名称完全相同（如两台 "WL24A"），按名称无法区分，dshow 也只会解析到
+	// 同一台物理设备；添加摄像头时应优先使用 AltSource 作为 source，ffmpeg 按
+	// 别名可精确打开对应物理设备。
+	AltSource string `json:"alt_source,omitempty"`
 }
 
 const (
@@ -54,7 +60,26 @@ func ListLocalVideoDevices(ffmpegBin string) ([]Device, error) {
 	default:
 		return nil, ErrUnsupportedPlatform
 	}
+	dedupeDisplayNames(devices)
 	return devices, err
+}
+
+// dedupeDisplayNames 对同名设备的展示名追加序号（"WL24A #1"、"WL24A #2"）。
+// 同型号多台摄像头的系统友好名称完全相同，不编号则在 UI 里无从区分；
+// 仅重命名展示字段，不影响 Source/AltSource 的取值与既有配置。
+func dedupeDisplayNames(devices []Device) {
+	idxs := map[string][]int{}
+	for i, d := range devices {
+		idxs[d.Name] = append(idxs[d.Name], i)
+	}
+	for name, list := range idxs {
+		if len(list) < 2 {
+			continue
+		}
+		for n, i := range list {
+			devices[i].Name = fmt.Sprintf("%s #%d", name, n+1)
+		}
+	}
 }
 
 // listLinuxScreens 用 xrandr 枚举已连接的显示器（一屏一 X display）。
@@ -270,8 +295,15 @@ func parseDShowDevices(stderr string) []Device {
 		trimmed := strings.TrimSpace(line)
 		// Alternative name 行两种格式都有且含引号，先处理再跳过，防止被设备名正则误匹配。
 		if strings.Contains(line, "Alternative name") {
-			if pending >= 0 && strings.Contains(trimmed, "usb#") {
-				devices[pending].Kind = kindUSB
+			if pending >= 0 {
+				// PnP 别名（@device_pnp_\\?\usb#...）是同型号多台设备间唯一的标识，
+				// 保存下来供 UI 以别名精确打开对应物理设备。
+				if am := quotedNameRe.FindStringSubmatch(trimmed); am != nil {
+					devices[pending].AltSource = am[1]
+				}
+				if strings.Contains(trimmed, "usb#") {
+					devices[pending].Kind = kindUSB
+				}
 			}
 			pending = -1
 			continue
