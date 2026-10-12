@@ -79,7 +79,7 @@ func TestSpecSensitivity(t *testing.T) {
 }
 
 func TestManagerSyncStartStop(t *testing.T) {
-	m := NewManager("rtsp://127.0.0.1:8554", "false", testLogger())
+	m := NewManager(func() string { return "rtsp://127.0.0.1:8554" }, "false", testLogger())
 	cam1 := config.Camera{ID: "cam1", Type: config.TypeTestSrc, Enabled: true}
 	m.Sync([]config.Camera{cam1})
 	if _, ok := m.Status("cam1"); !ok {

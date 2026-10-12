@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ptzReg := ptzmock.NewRegistry()
-	streams := stream.NewManager("rtsp://127.0.0.1:8554", "false", logger)
+	streams := stream.NewManager(func() string { return "rtsp://127.0.0.1:8554" }, "false", logger)
 	snaps := snapshot.New("false", logger)
 	onvif := onvifserver.NewService(store, ptzReg,
 		onvifserver.URIs{AdvertiseIP: "192.0.2.10", HTTPPort: 8080, RTSPPort: 8554}, logger)
