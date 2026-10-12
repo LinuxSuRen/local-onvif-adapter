@@ -253,3 +253,69 @@ func TestScreenInputArgsPerPlatform(t *testing.T) {
 		t.Fatalf("explicit display: %q", got)
 	}
 }
+
+// TestParseXrandrScreens 解析 xrandr 已连接行内的几何信息，生成按显示器采集源。
+func TestParseXrandrScreens(t *testing.T) {
+	sample := `Screen 0: minimum 320 x 200, current 4480 x 1440, maximum 16384 x 16384
+eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 309mm x 174mm
+HDMI-1 connected 2560x1440+1920+0 (normal left inverted right x axis y axis) 597mm x 336mm
+DP-1 disconnected (normal left inverted right x axis y axis)
+`
+	devices := parseXrandrScreens(sample)
+	if len(devices) != 2 {
+		t.Fatalf("devices = %+v, want 2 (disconnected 忽略)", devices)
+	}
+	if devices[0].Source != ":0.0+0,0@1920x1080" || devices[0].Type != string(config.TypeScreen) {
+		t.Fatalf("device0: %+v", devices[0])
+	}
+	if devices[1].Source != ":0.0+1920,0@2560x1440" {
+		t.Fatalf("device1 source: %+v", devices[1])
+	}
+	if !strings.Contains(devices[1].Name, "2560×1440") {
+		t.Fatalf("device1 name should carry size: %+v", devices[1])
+	}
+	// 无几何信息（如 xrandr 异常输出）时回退整屏 :0.0。
+	devices = parseXrandrScreens("eDP-1 connected primary unknown")
+	if len(devices) != 1 || devices[0].Source != ":0.0" {
+		t.Fatalf("fallback: %+v", devices)
+	}
+}
+
+// TestScreenInputArgsMonitorRect Windows 指定显示器（desktop@X,Y,WxH）：
+// 偏移 + 按显示器尺寸裁剪；用户显式分辨率优先。
+func TestScreenInputArgsMonitorRect(t *testing.T) {
+	cam := config.Camera{Type: config.TypeScreen, Source: "desktop@-3440,-40,2752x1152", Framerate: 15}
+	got := strings.Join(screenInputArgsFor("windows", cam), " ")
+	for _, want := range []string{
+		"-f gdigrab", "-offset_x -3440", "-offset_y -40", "-video_size 2752x1152", "-i desktop",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	// 用户显式配置分辨率时在显示器内裁剪该尺寸。
+	cam.Width, cam.Height = 1280, 720
+	got = strings.Join(screenInputArgsFor("windows", cam), " ")
+	for _, want := range []string{"-offset_x -3440", "-offset_y -40", "-video_size 1280x720"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("override missing %q in %q", want, got)
+		}
+	}
+}
+
+// TestScreenInputArgsX11Monitor Linux 指定显示器（:0.0+X,Y@WxH）。
+func TestScreenInputArgsX11Monitor(t *testing.T) {
+	cam := config.Camera{Type: config.TypeScreen, Source: ":0.0+1920,0@2560x1440", Framerate: 15}
+	got := strings.Join(screenInputArgsFor("linux", cam), " ")
+	for _, want := range []string{"-f x11grab", "-video_size 2560x1440", "-i :0.0+1920,0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	// 用户显式配置分辨率时优先。
+	cam.Width, cam.Height = 1280, 720
+	got = strings.Join(screenInputArgsFor("linux", cam), " ")
+	if !strings.Contains(got, "-video_size 1280x720") {
+		t.Fatalf("override: %q", got)
+	}
+}
