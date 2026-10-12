@@ -11,6 +11,10 @@ import (
 
 func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 	root := t.TempDir()
+	// Windows 无管理员/开发者模式权限时 os.Symlink 会失败（错误此前被忽略，
+	// 导致 Kind 断言在 Windows 必挂）。记录可用性，Kind 断言仅在符号链接
+	// 可创建时执行；Linux CI 上始终完整覆盖。
+	canSymlink := true
 	// 构造：video0 = USB 主摄像头（index 0），video1 = 同一 USB 设备的元数据节点
 	//（index 1，应被过滤），video2 = PCIe 内置摄像头（index 0）。
 	makeNode := func(base, name, index, deviceLink string) {
@@ -25,7 +29,9 @@ func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 			_ = os.WriteFile(filepath.Join(dir, "index"), []byte(index), 0o644)
 		}
 		if deviceLink != "" {
-			_ = os.Symlink(deviceLink, filepath.Join(dir, "device"))
+			if err := os.Symlink(deviceLink, filepath.Join(dir, "device")); err != nil {
+				canSymlink = false
+			}
 		}
 	}
 	makeNode("video0", "USB2.0 HD UVC WebCam", "0",
@@ -54,11 +60,16 @@ func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 	if devices[0].Source != filepath.Join(devDir, "video0") || devices[0].Name != "USB2.0 HD UVC WebCam" {
 		t.Fatalf("device0: %+v", devices[0])
 	}
-	if devices[0].Type != string(config.TypeV4L2) || devices[0].Kind != kindUSB {
+	if devices[0].Type != string(config.TypeV4L2) {
 		t.Fatalf("device0 meta: %+v", devices[0])
 	}
-	if devices[1].Kind != kindBuiltin {
-		t.Fatalf("device2 should be builtin: %+v", devices[1])
+	if canSymlink {
+		if devices[0].Kind != kindUSB {
+			t.Fatalf("device0 meta: %+v", devices[0])
+		}
+		if devices[1].Kind != kindBuiltin {
+			t.Fatalf("device2 should be builtin: %+v", devices[1])
+		}
 	}
 }
 
