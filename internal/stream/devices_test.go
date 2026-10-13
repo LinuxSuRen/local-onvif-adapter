@@ -116,6 +116,9 @@ func TestParseDShowDevices(t *testing.T) {
 	if devices[0].Name != "Integrated Camera" || devices[0].Source != "Integrated Camera" {
 		t.Fatalf("device0: %+v", devices[0])
 	}
+	if devices[0].AltSource != `@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\Integrated Camera` {
+		t.Fatalf("alt source not captured: %+v", devices[0])
+	}
 	if devices[0].Kind != kindBuiltin || devices[1].Kind != kindUSB {
 		t.Fatalf("kinds: %+v", devices)
 	}
@@ -140,6 +143,9 @@ func TestParseDShowDevicesNewFormat(t *testing.T) {
 	if devices[0].Name != "WL24A" || devices[0].Source != "WL24A" {
 		t.Fatalf("device0: %+v", devices[0])
 	}
+	if devices[0].AltSource != `@device_pnp_\\?\usb#vid_2f9d&pid_0024&mi_00#6&19fd0de&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global` {
+		t.Fatalf("pnp alias not captured: %+v", devices[0])
+	}
 	// PnP 路径含 usb# → 标记为 USB（比名字猜测准确）。
 	if devices[0].Kind != kindUSB {
 		t.Fatalf("WL24A should be usb via pnp path: %+v", devices[0])
@@ -150,6 +156,36 @@ func TestParseDShowDevicesNewFormat(t *testing.T) {
 	}
 	if devices[0].Type != string(config.TypeDShow) {
 		t.Fatalf("type: %+v", devices[0])
+	}
+}
+
+// TestParseDShowDevicesDuplicateNames 同型号多台摄像头：友好名称完全相同，
+// PnP 别名各自唯一。解析后经 dedupeDisplayNames 编号，UI 才能区分展示。
+func TestParseDShowDevicesDuplicateNames(t *testing.T) {
+	sample := `[in#0 @ 000001d24d600580] "WL24A" (video)
+[in#0 @ 000001d24d600580]   Alternative name "@device_pnp_\\?\usb#vid_2f9d&pid_0024&mi_00#6&2133af5&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+[in#0 @ 000001d24d600580] "WL24A" (video)
+[in#0 @ 000001d24d600580]   Alternative name "@device_pnp_\\?\usb#vid_2f9d&pid_0024&mi_00#6&2884aa85&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+[in#0 @ 000001d24d600580] "USB2.0 HD UVC WebCam" (video)
+[in#0 @ 000001d24d600580]   Alternative name "@device_pnp_\\?\usb#vid_1234&pid_5678&mi_00#6&abcdef&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global"
+`
+	devices := parseDShowDevices(sample)
+	dedupeDisplayNames(devices)
+	if len(devices) != 3 {
+		t.Fatalf("devices = %+v, want 3", devices)
+	}
+	if devices[0].Name != "WL24A #1" || devices[1].Name != "WL24A #2" {
+		t.Fatalf("duplicate names not numbered: %+v", devices)
+	}
+	if devices[2].Name != "USB2.0 HD UVC WebCam" {
+		t.Fatalf("unique name should keep as-is: %+v", devices[2])
+	}
+	if devices[0].AltSource == "" || devices[0].AltSource == devices[1].AltSource {
+		t.Fatalf("alt sources must be distinct: %+v", devices)
+	}
+	// Source 保持系统友好名称不变，仅展示名编号。
+	if devices[0].Source != "WL24A" || devices[1].Source != "WL24A" {
+		t.Fatalf("source should keep friendly name: %+v", devices)
 	}
 }
 

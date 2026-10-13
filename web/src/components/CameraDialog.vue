@@ -26,7 +26,6 @@ const DEFAULT_FORM = {
   framerate: 15,
   bitrate_kbps: 2048,
   infrared: false,
-  ptz: false,
   enabled: true
 }
 
@@ -87,6 +86,12 @@ function deviceLabel(d) {
   return k ? `${d.name}（${k}）` : d.name
 }
 
+// 设备下拉的实际取值：优先用唯一别名（同型号多台摄像头友好名称相同，
+// DirectShow 按名称只会解析到同一台物理设备；PnP 别名可精确打开对应设备）。
+function deviceValue(d) {
+  return d.alt_source || d.source
+}
+
 // 当前模式下可选的设备列表：本地摄像头排除屏幕，屏幕模式只显示屏幕。
 const filteredDevices = computed(() => {
   if (mode.value === 'screen') {
@@ -97,9 +102,13 @@ const filteredDevices = computed(() => {
 
 // 选择设备：类型随设备携带。
 function onDeviceChange(source) {
-  const dev = filteredDevices.value.find((d) => d.source === source)
+  const dev = filteredDevices.value.find((d) => deviceValue(d) === source)
   if (dev) {
     form.type = dev.type
+    // 名称未填写时，用所选设备名自动补齐（如 "WL24A #1"），减少手动输入。
+    if (!form.name.trim()) {
+      form.name = dev.name
+    }
   } else if (mode.value === 'screen') {
     form.type = 'screen'
   } else {
@@ -154,7 +163,6 @@ watch(
         framerate: c.framerate != null ? c.framerate : 15,
         bitrate_kbps: c.bitrate_kbps != null ? c.bitrate_kbps : 2048,
         infrared: !!c.infrared,
-        ptz: !!c.ptz_supported,
         enabled: !!c.enabled
       })
       mode.value = LOCAL_TYPES.includes(c.type) ? 'local' : c.type || 'local'
@@ -176,7 +184,7 @@ async function handleSave() {
   // 兜底：本地模式下类型始终跟随设备或平台默认值。
   let type = form.type
   if (mode.value === 'local' || mode.value === 'screen') {
-    const dev = filteredDevices.value.find((d) => d.source === form.source)
+    const dev = filteredDevices.value.find((d) => deviceValue(d) === form.source)
     type = dev ? dev.type : mode.value === 'screen' ? 'screen' : defaultLocalType.value
   } else {
     type = mode.value
@@ -191,7 +199,6 @@ async function handleSave() {
     framerate: form.framerate,
     bitrate_kbps: form.bitrate_kbps,
     infrared: form.infrared,
-    ptz_supported: form.ptz,
     enabled: form.enabled
   }
   try {
@@ -236,7 +243,7 @@ async function handleSave() {
             :placeholder="mode === 'screen' ? '选择要采集的屏幕' : '选择检测到的摄像头，或直接输入设备源'"
             @change="onDeviceChange"
           >
-            <el-option v-for="d in filteredDevices" :key="d.source" :label="deviceLabel(d)" :value="d.source" />
+            <el-option v-for="d in filteredDevices" :key="deviceValue(d)" :label="deviceLabel(d)" :value="deviceValue(d)" />
           </el-select>
           <el-button class="enum-refresh" :loading="devicesLoading" @click="loadDevices(true)">刷新</el-button>
         </div>
@@ -277,10 +284,6 @@ async function handleSave() {
       <el-form-item label="红外">
         <el-switch v-model="form.infrared" />
         <div class="form-tip">标记为红外通道后，ONVIF profile 名称会带 infrared，客户端可自动识别</div>
-      </el-form-item>
-      <el-form-item label="云台">
-        <el-switch v-model="form.ptz" />
-        <div class="form-tip">仅支持云台转动的摄像头开启；固定枪机/屏幕采集等不开</div>
       </el-form-item>
       <el-form-item label="启用">
         <el-switch v-model="form.enabled" />
