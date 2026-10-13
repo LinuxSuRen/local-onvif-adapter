@@ -35,6 +35,16 @@ var (
 )
 
 func main() {
+	// install / uninstall 子命令在全局 flag 解析之前拦截（它们有自己的参数集），
+	// 用法：local-onvif-adapter install [-data-dir ...] [-dry-run]。
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			os.Exit(runInstall(os.Args[2:]))
+		case "uninstall":
+			os.Exit(runUninstall(os.Args[2:]))
+		}
+	}
 	var (
 		httpAddr    = flag.String("http-addr", envOr("HTTP_ADDR", ":8080"), "HTTP 监听地址（UI/API/ONVIF SOAP）")
 		advertiseIP = flag.String("advertise-ip", envOr("ADVERTISE_IP", ""), "对外宣告 IP，留空自动探测")

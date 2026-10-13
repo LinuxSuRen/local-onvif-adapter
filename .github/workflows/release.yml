@@ -64,7 +64,7 @@ jobs:
             NAME="local-onvif-adapter_${GOOS}_${GOARCH}"
             echo "==> building ${NAME}"
             CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
-              go build -trimpath -ldflags "${LDFLAGS}" -o "dist/${NAME}/local-onvif-adapter" ./cmd/local-onvif-adapter
+              go build -trimpath -ldflags "${LDFLAGS}" -o "dist/${NAME}/local-onvif-adapter" .
             cp LICENSE README.md "dist/${NAME}/"
             if [ "${GOOS}" = "windows" ]; then
               (cd "dist/${NAME}" && zip -r "../${NAME}.zip" .)
