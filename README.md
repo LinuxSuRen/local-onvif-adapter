@@ -190,6 +190,66 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 | `--discovery` | `DISCOVERY` | `true` | 是否开启 WS-Discovery |
 | `--log-level` | `LOG_LEVEL` | `info` | 日志级别 |
 
+## 开机自启
+
+Windows 下提供子命令一键注册/卸载开机自启（用户登录时静默启动，无控制台闪窗）：
+
+```powershell
+# 注册：记录当前可执行文件与 data-dir，并从既有配置重建完整启动参数
+local-onvif-adapter.exe install -data-dir D:\path\to\data
+# 预览将注册的内容（不落盘）
+local-onvif-adapter.exe install -data-dir D:\path\to\data -dry-run
+# 卸载（幂等）
+local-onvif-adapter.exe uninstall -data-dir D:\path\to\data
+```
+
+实现：HKCU `Run` 注册表键 + data-dir 下的 VBS 隐藏窗口启动器；免管理员权限。
+**为什么是"登录时启动"而不是系统服务**：采集桌面（gdigrab）与摄像头（dshow）
+要求进程运行在交互式用户会话中，SYSTEM 服务位于 Session 0 采不到画面。
+注意：移动可执行文件或数据目录后需重新执行 `install`；主程序每次启动会把
+命令行参数写回配置文件，因此 `install` 会显式携带当前配置的完整参数，
+避免自启动把用户配置重置为默认值。
+
+### 其他平台（手动配置）
+
+Linux（systemd 用户单元）：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/local-onvif-adapter.service <<'EOF'
+[Unit]
+Description=local ONVIF adapter
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/local-onvif-adapter -data-dir %h/.local-onvif-adapter
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user enable --now local-onvif-adapter
+```
+
+macOS（launchd，登录时启动）：
+
+```bash
+cat > ~/Library/LaunchAgents/com.linuxsuren.local-onvif-adapter.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.linuxsuren.local-onvif-adapter</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/bin/local-onvif-adapter</string>
+    <string>-data-dir</string><string>/Users/USERNAME/.local-onvif-adapter</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+</dict></plist>
+EOF
+launchctl load ~/Library/LaunchAgents/com.linuxsuren.local-onvif-adapter.plist
+```
+
 ### 修改 RTSP 端口
 
 RTSP 端口支持三种修改途径，优先级从高到低：

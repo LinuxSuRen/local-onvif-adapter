@@ -108,6 +108,7 @@ func Default() *Root {
 			AdvertiseIP:  "",
 			RTSPPushAddr: "rtsp://127.0.0.1:8554",
 			RTSPPort:     8554,
+			RTSPEmbedded: true, // 与 -rtsp-server 命令行默认值一致；此前缺省 false 与注释"默认 true"不符
 			FFmpegBin:    "ffmpeg",
 			Discovery:    true,
 		},
