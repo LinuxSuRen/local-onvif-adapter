@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -88,11 +89,18 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 func TestRunInstallDryRun(t *testing.T) {
 	dir := t.TempDir()
 	code := runInstall([]string{"-data-dir", dir, "-dry-run"})
-	if code != 0 {
-		t.Fatalf("install -dry-run exit = %d, want 0", code)
+	if runtime.GOOS == "windows" {
+		if code != 0 {
+			t.Fatalf("install -dry-run exit = %d, want 0", code)
+		}
+		// dry-run 不落任何文件。
+		if _, err := os.Stat(filepath.Join(dir, autostartVBSName)); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not write vbs: %v", err)
+		}
+		return
 	}
-	// dry-run 不落任何文件。
-	if _, err := os.Stat(filepath.Join(dir, autostartVBSName)); !os.IsNotExist(err) {
-		t.Fatalf("dry-run should not write vbs: %v", err)
+	// 非 Windows：入口即判平台支持，dry-run 也应失败退出（无误导性预览）。
+	if code != 1 {
+		t.Fatalf("install -dry-run exit = %d on %s, want 1", code, runtime.GOOS)
 	}
 }
