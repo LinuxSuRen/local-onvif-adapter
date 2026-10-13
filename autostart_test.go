@@ -39,13 +39,18 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 		t.Fatalf("launchArgsFromConfig: %v", err)
 	}
 	join := strings.Join(args, " ")
-	for _, want := range []string{"-http-addr :8080", "-rtsp-port 8554", "-rtsp-server true", "-ffmpeg-bin ffmpeg"} {
+	for _, want := range []string{"-http-addr :8080", "-rtsp-server true", "-ffmpeg-bin ffmpeg"} {
 		if !strings.Contains(join, want) {
 			t.Fatalf("default config args missing %q in %q", want, join)
 		}
 	}
 	if strings.Contains(join, "-advertise-ip") || strings.Contains(join, "-discovery") {
 		t.Fatalf("default config should not carry optional flags: %q", join)
+	}
+	// RTSP 端口不得携带：#15 语义下不携带该 flag 时配置文件即权威，
+	// 携带反而会把 install 时刻的端口冻结住，回滚用户后续修改。
+	if strings.Contains(join, "-rtsp-port") {
+		t.Fatalf("args should not freeze -rtsp-port: %q", join)
 	}
 
 	// 定制配置：非默认端口/发现关闭/固定宣告 IP/外部 mediamtx。
@@ -70,10 +75,13 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 		t.Fatalf("launchArgsFromConfig(dir2): %v", err)
 	}
 	join = strings.Join(args, " ")
-	for _, want := range []string{"-http-addr 127.0.0.1:1235", "-rtsp-port 18655", "-advertise-ip 192.168.18.165", "-discovery=false", "-rtsp-server false", "-rtsp-push rtsp://127.0.0.1:1932"} {
+	for _, want := range []string{"-http-addr 127.0.0.1:1235", "-advertise-ip 192.168.18.165", "-discovery=false", "-rtsp-server false", "-rtsp-push rtsp://127.0.0.1:1932"} {
 		if !strings.Contains(join, want) {
 			t.Fatalf("custom config args missing %q in %q", want, join)
 		}
+	}
+	if strings.Contains(join, "-rtsp-port") {
+		t.Fatalf("args should not freeze -rtsp-port: %q", join)
 	}
 }
 

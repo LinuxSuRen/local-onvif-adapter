@@ -10,7 +10,7 @@ before:
 
 builds:
   - id: local-onvif-adapter
-    main: ./cmd/local-onvif-adapter
+    main: .
     binary: local-onvif-adapter
     env:
       - CGO_ENABLED=0

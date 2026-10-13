@@ -38,6 +38,11 @@ func runInstall(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "只打印将注册的内容，不落盘")
 	_ = fs.Parse(args)
 
+	if !autostartSupported() {
+		fmt.Fprintln(os.Stderr, "当前平台暂不支持 install 子命令，参考 README「开机自启」手动配置（systemd/launchd）。")
+		return 1
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "获取可执行文件路径失败: %v\n", err)
@@ -75,13 +80,16 @@ func runInstall(args []string) int {
 		fmt.Fprintf(os.Stderr, "创建数据目录失败: %v\n", err)
 		return 1
 	}
+	// 先写注册表，成功后再落 VBS；VBS 写失败时回滚注册，
+	// 避免残留指向不存在文件的注册表项。
+	if err := registerAutostart(runValue); err != nil {
+		fmt.Fprintf(os.Stderr, "写注册表失败: %v\n", err)
+		return 1
+	}
 	// VBS 只用 ASCII：wscript 按本地编码解析脚本，避免非 ASCII 注释乱码。
 	if err := os.WriteFile(vbsPath, []byte(vbs), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "写入启动器失败: %v\n", err)
-		return 1
-	}
-	if err := registerAutostart(runValue); err != nil {
-		fmt.Fprintf(os.Stderr, "写注册表失败: %v\n", err)
+		_ = unregisterAutostart()
 		return 1
 	}
 	fmt.Println("已注册开机自启（用户登录时静默启动）。")
@@ -124,10 +132,12 @@ func launchArgsFromConfig(dir string) ([]string, error) {
 	cfg := store.Root().Server
 	args := []string{
 		"-http-addr", cfg.HTTPAddr,
-		"-rtsp-port", strconv.Itoa(cfg.RTSPPort),
 		"-rtsp-server", strconv.FormatBool(cfg.RTSPEmbedded),
 		"-ffmpeg-bin", cfg.FFmpegBin,
 	}
+	// 注意不携带 -rtsp-port：#15 起 RTSP 端口仅在命令行/环境变量显式指定时
+	// 才覆盖配置文件，不携带时配置即权威——用户之后经 UI/API 改的端口在
+	// 自启动重启后才能保留；若在此冻结端口值会静默回滚用户的修改。
 	if cfg.AdvertiseIP != "" {
 		args = append(args, "-advertise-ip", cfg.AdvertiseIP)
 	}

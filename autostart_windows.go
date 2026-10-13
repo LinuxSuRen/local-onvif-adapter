@@ -18,6 +18,9 @@ func registerAutostart(value string) error {
 	return k.SetStringValue(autostartRunName, value)
 }
 
+// autostartSupported Windows 支持子命令注册。
+func autostartSupported() bool { return true }
+
 // unregisterAutostart 删除 Run 键值；值不存在视为成功（幂等）。
 func unregisterAutostart() error {
 	k, err := registry.OpenKey(registry.CURRENT_USER, autostartRunKey, registry.SET_VALUE)

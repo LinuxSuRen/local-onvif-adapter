@@ -15,3 +15,5 @@ func unregisterAutostart() error {
 }
 
 func autostartRegistered() (string, bool) { return "", false }
+
+func autostartSupported() bool { return false }
