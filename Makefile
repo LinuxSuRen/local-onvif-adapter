@@ -20,7 +20,7 @@ build-web: ## 构建前端（产物 web/dist）
 	cd $(WEB_DIR) && npm run build
 
 build-go: ## 编译后端单二进制（内嵌前端）
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/local-onvif-adapter
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 build: build-web build-go ## 构建前端 + 后端
 

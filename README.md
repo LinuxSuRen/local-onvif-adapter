@@ -87,6 +87,7 @@ make setup     # 前端依赖（首次）
 make run       # 构建并本地运行（需本机 ffmpeg）
 make test      # go test -race
 make lint      # go vet
+go run .       # 或者直接跑（同样需本机 ffmpeg）
 ```
 
 前端单独开发调试：`cd web && npm run dev`（/api、/onvif 代理到 127.0.0.1:8080）。
@@ -160,7 +161,7 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 ## 目录结构
 
 ```
-├── cmd/local-onvif-adapter/          # 服务入口（flag/env 装配）
+├── main.go 等                 # 服务入口（flag/env 装配、install/uninstall 子命令，go run . 即可启动）
 ├── internal/
 │   ├── api/                  # 管理 REST API + 静态 UI 托管 + 快照路由
 │   ├── config/               # 配置与摄像头列表持久化（data/config.json）

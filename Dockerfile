@@ -16,7 +16,7 @@ COPY internal/ internal/
 COPY web/embed.go web/embed.go
 COPY --from=web /src/web/dist web/dist/
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/local-onvif-adapter ./cmd/local-onvif-adapter
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/local-onvif-adapter .
 
 # ---- 运行镜像 ----
 FROM alpine:3.20
