@@ -67,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("PUT /api/discovery", s.handleToggleDiscovery)
+	mux.HandleFunc("PUT /api/rtsp-port", s.handleUpdateRTSPPort)
+	mux.HandleFunc("PUT /api/auth", s.handleUpdateAuth)
 
 	mux.HandleFunc("GET /api/cameras", s.handleListCameras)
 	mux.HandleFunc("POST /api/cameras", s.handleCreateCamera)
@@ -102,18 +104,79 @@ func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"version":           s.version,
-		"advertise_ip":      uris.AdvertiseIP,
-		"http_port":         uris.HTTPPort,
-		"rtsp_port":         uris.RTSPPort,
-		"onvif_endpoint":    uris.XAddr(),
-		"discovery_enabled": root.Server.Discovery,
-		"camera_count":      len(root.Cameras),
-		"profile_count":     enabled,
+		"version":              s.version,
+		"advertise_ip":         uris.AdvertiseIP,
+		"http_port":            uris.HTTPPort,
+		"rtsp_port":            uris.RTSPPort,
+		"rtsp_port_configured": root.Server.RTSPPort,
+		"onvif_endpoint":       uris.XAddr(),
+		"discovery_enabled":    root.Server.Discovery,
+		"auth_enabled":         root.Server.AuthEnabled,
+		"camera_count":         len(root.Cameras),
+		"profile_count":        enabled,
 	})
 }
 
-// handleToggleDiscovery 运行时启停 WS-Discovery。
+// handleUpdateRTSPPort 修改 RTSP 端口：持久化到配置文件，重启服务后生效。
+// 当前实际监听端口（含端口漂移）不受影响；两者不一致时 UI 提示待重启。
+func (s *Server) handleUpdateRTSPPort(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RTSPPort int `json:"rtsp_port"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if req.RTSPPort < 1 || req.RTSPPort > 65535 {
+		writeError(w, http.StatusBadRequest, "invalid_argument", "RTSP 端口取值范围 1-65535")
+		return
+	}
+	if err := s.store.Update(func(root *config.Root) error {
+		root.Server.RTSPPort = req.RTSPPort
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
+		return
+	}
+	restartRequired := req.RTSPPort != s.onvif.URIs().RTSPPort
+	s.logger.Info("rtsp port updated", "port", req.RTSPPort, "restart_required", restartRequired)
+	writeData(w, http.StatusOK, map[string]any{
+		"rtsp_port":        req.RTSPPort,
+		"restart_required": restartRequired,
+	})
+}
+// handleUpdateAuth 更新设备面认证（ONVIF SOAP + RTSP 共用账号）。
+// 变更后重启全部取流进程：ffmpeg 推流地址需要按新凭证重建 userinfo。
+func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled  bool   `json:"enabled"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if req.Enabled && (req.Username == "" || req.Password == "") {
+		writeError(w, http.StatusBadRequest, "invalid_args", "开启认证需要填写用户名和密码")
+		return
+	}
+	if err := s.store.Update(func(root *config.Root) error {
+		root.Server.AuthEnabled = req.Enabled
+		root.Server.AuthUser = req.Username
+		root.Server.AuthPass = req.Password
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
+		return
+	}
+	// 推流地址携带的 userinfo 随凭证变化，重启取流进程以新地址重推。
+	root := s.store.Root()
+	s.streams.Sync(root.Cameras)
+	s.logger.Info("device auth updated", "enabled", req.Enabled)
+	writeData(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+}
+
 func (s *Server) handleToggleDiscovery(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`

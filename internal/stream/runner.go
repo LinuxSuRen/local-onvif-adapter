@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -40,21 +41,23 @@ type Runner struct {
 
 // Manager 管理全部取流进程。
 type Manager struct {
-	mu       sync.Mutex
-	runners  map[string]*Runner
-	pushAddr string
-	bin      string
-	logger   *slog.Logger
+	mu        sync.Mutex
+	runners   map[string]*Runner
+	pushBase  func() string // 每次取流实时求值（认证开关变化时注入/移除 userinfo）
+	lastAddr  string        // 上次使用的推流地址；变化即全部重启
+	bin       string
+	logger    *slog.Logger
 }
 
-// NewManager 创建取流管理器。pushAddr 形如 rtsp://127.0.0.1:8554。
-func NewManager(pushAddr, bin string, logger *slog.Logger) *Manager {
+// NewManager 创建取流管理器。pushBase 返回推流目标（形如 rtsp://127.0.0.1:8554，
+// 认证启用时应携带 userinfo，见 main.go）。
+func NewManager(pushBase func() string, bin string, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
 		runners:  map[string]*Runner{},
-		pushAddr: pushAddr,
+		pushBase: pushBase,
 		bin:      bin,
 		logger:   logger,
 	}
@@ -70,6 +73,17 @@ func Spec(c config.Camera) string {
 func (m *Manager) Sync(cameras []config.Camera) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 推流地址变化（认证开关切换注入/移除 userinfo）：停掉全部进程，
+	// 按新地址重建，避免旧进程以失效凭证反复 401。
+	addr := m.pushBase()
+	if addr != m.lastAddr {
+		for id, r := range m.runners {
+			r.Stop()
+			delete(m.runners, id)
+		}
+		m.lastAddr = addr
+	}
 
 	want := map[string]config.Camera{}
 	for _, c := range cameras {
@@ -94,7 +108,7 @@ func (m *Manager) Sync(cameras []config.Camera) {
 		if _, ok := m.runners[id]; ok {
 			continue
 		}
-		r := newRunner(c, m.pushAddr, m.bin, m.logger)
+		r := newRunner(c, m.pushBase(), m.bin, m.logger)
 		m.runners[id] = r
 		go r.Run()
 	}
@@ -315,11 +329,20 @@ func InputArgs(c config.Camera) []string {
 
 // screenInputArgs 按平台构造屏幕采集的 ffmpeg 输入参数：
 //   - macOS：用包装脚本持续 screencapture → ffmpeg image2pipe（绕开 avfoundation 权限问题）
-//   - Linux：source 为 X display（如 ":0.0"，一屏一源）
-//   - Windows：source 为 desktop（gdigrab 主屏）或 title=窗口名
+//   - Linux：source 为 X display（":0.0" 全屏或 ":0.0+X,Y@WxH" 指定显示器）
+//   - Windows：source 为 desktop（全虚拟桌面）、desktop@X,Y,WxH（指定显示器）
+//     或 title=窗口名
 func screenInputArgs(c config.Camera) []string {
 	return screenInputArgsFor(runtime.GOOS, c)
 }
+
+// monitorRectRe 匹配 Windows 显示器矩形 source："desktop@X,Y,WxH"
+// （X/Y 为虚拟桌面坐标，可为负；W/H 为该显示器尺寸）。
+var monitorRectRe = regexp.MustCompile(`^desktop@(-?\d+),(-?\d+),(\d+)x(\d+)$`)
+
+// x11ScreenRectRe 匹配 Linux 显示器 source：":0.0+X,Y@WxH"
+// （x11grab 原生支持 display 偏移 +X,Y；@WxH 为本程序附加的期望尺寸）。
+var x11ScreenRectRe = regexp.MustCompile(`^(:[0-9.]+(?:\+\d+,\d+)?)@(\d+)x(\d+)$`)
 
 // screenInputArgsFor 按指定 GOOS 构造参数（goos 参数仅为可测试性）。
 func screenInputArgsFor(goos string, c config.Camera) []string {
@@ -334,12 +357,22 @@ func screenInputArgsFor(goos string, c config.Camera) []string {
 		if fps > 0 {
 			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
 		}
-		if c.Width > 0 && c.Height > 0 {
-			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
-		}
 		src := strings.TrimSpace(c.Source)
 		if src == "" {
 			src = "desktop"
+		}
+		// 指定显示器：desktop@X,Y,WxH → 虚拟桌面坐标偏移 + 按显示器尺寸裁剪。
+		// 用户显式配置了分辨率时以用户值为准（在显示器内裁剪）。
+		if m := monitorRectRe.FindStringSubmatch(src); m != nil {
+			args = append(args, "-offset_x", m[1], "-offset_y", m[2])
+			if c.Width <= 0 || c.Height <= 0 {
+				args = append(args, "-video_size", m[3]+"x"+m[4])
+			} else {
+				args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+			}
+			src = "desktop"
+		} else if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
 		}
 		args = append(args, "-i", src)
 	default: // linux（x11grab）
@@ -347,12 +380,20 @@ func screenInputArgsFor(goos string, c config.Camera) []string {
 		if fps > 0 {
 			args = append(args, "-framerate", fmt.Sprintf("%d", fps))
 		}
-		if c.Width > 0 && c.Height > 0 {
-			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
-		}
 		src := strings.TrimSpace(c.Source)
 		if src == "" {
 			src = ":0.0"
+		}
+		// 指定显示器：":0.0+X,Y@WxH" → display 偏移采集，尺寸默认取显示器矩形。
+		if m := x11ScreenRectRe.FindStringSubmatch(src); m != nil {
+			src = m[1]
+			if c.Width <= 0 || c.Height <= 0 {
+				args = append(args, "-video_size", m[2]+"x"+m[3])
+			} else {
+				args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
+			}
+		} else if c.Width > 0 && c.Height > 0 {
+			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
 		}
 		args = append(args, "-i", src)
 	}

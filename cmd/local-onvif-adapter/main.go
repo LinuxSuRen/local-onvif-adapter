@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -64,11 +65,16 @@ func main() {
 
 	// 配置中的服务参数优先级低于命令行显式指定；此处采用简单策略：
 	// 命令行/环境变量值写回配置，使其成为唯一事实来源。
+	// 例外：RTSP 端口仅在 flag 或环境变量显式指定时才覆盖配置——
+	// 否则保留配置文件中的值，使 PUT /api/rtsp-port 的修改重启后仍生效。
+	rtspPortExplicit := flagExplicit(flag.CommandLine, "rtsp-port") || os.Getenv("RTSP_PORT") != ""
 	if err := store.Update(func(r *config.Root) error {
 		r.Server.HTTPAddr = *httpAddr
 		r.Server.AdvertiseIP = *advertiseIP
 		r.Server.RTSPPushAddr = *rtspPush
-		r.Server.RTSPPort = *rtspPort
+		if rtspPortExplicit {
+			r.Server.RTSPPort = *rtspPort
+		}
 		r.Server.RTSPEmbedded = *rtspServer
 		r.Server.FFmpegBin = *ffmpegBin
 		r.Server.Discovery = *discoveryOn
@@ -99,7 +105,7 @@ func main() {
 	// 内嵌 RTSP 服务器（gortsplib，替代 mediamtx）；端口被占时与 HTTP 同款漂移。
 	// 实际端口必须先于 uris 计算，保证 GetStreamUri 宣告的地址正确。
 	rtspPortActual := root.Server.RTSPPort
-	pushAddr := root.Server.RTSPPushAddr
+	pushBase := root.Server.RTSPPushAddr
 	var rtspSrv *rtspserver.Server
 	if root.Server.RTSPEmbedded {
 		rtspSrv, rtspPortActual, err = startEmbeddedRTSP(root.Server.RTSPPort, logger)
@@ -110,7 +116,12 @@ func main() {
 		if rtspPortActual != root.Server.RTSPPort {
 			logger.Warn("rtsp port drifted", "from", root.Server.RTSPPort, "to", rtspPortActual)
 		}
-		pushAddr = fmt.Sprintf("rtsp://127.0.0.1:%d", rtspPortActual)
+		pushBase = fmt.Sprintf("rtsp://127.0.0.1:%d", rtspPortActual)
+		// 设备面认证：凭证按请求实时读取配置（支持运行时开关），
+		// ffmpeg 推流端经 pushBase 注入 userinfo 走同一账号。
+		rtspSrv.Creds = func() (string, string, bool) {
+			return store.Root().Server.AuthCreds()
+		}
 		go func() {
 			if err := rtspSrv.Wait(); err != nil {
 				logger.Error("embedded rtsp server exited", "err", err.Error())
@@ -120,8 +131,22 @@ func main() {
 	}
 	uris := onvifserver.URIs{AdvertiseIP: ip, HTTPPort: httpPort, RTSPPort: rtspPortActual}
 
+	// withCreds 把账号注入推流地址 userinfo（特殊字符自动百分号转义）。
+	withCreds := func(base string) string {
+		user, pass, ok := store.Root().Server.AuthCreds()
+		if !ok {
+			return base
+		}
+		u, err := url.Parse(base)
+		if err != nil || u.Host == "" {
+			return base
+		}
+		u.User = url.UserPassword(user, pass)
+		return u.String()
+	}
+
 	ptzReg := ptzmock.NewRegistry()
-	streams := stream.NewManager(pushAddr, root.Server.FFmpegBin, logger)
+	streams := stream.NewManager(func() string { return withCreds(pushBase) }, root.Server.FFmpegBin, logger)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
 	// ONVIF 客户端修改编码参数后，重启对应取流进程。
@@ -132,7 +157,7 @@ func main() {
 
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
 	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
-	apiSrv.RTSPBaseURL = pushAddr
+	apiSrv.RTSPBaseURL = withCreds(pushBase)
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。
@@ -246,6 +271,17 @@ func udpPortsFree(ports ...int) bool {
 	return true
 }
 
+// flagExplicit 判断某个命令行参数是否被显式指定（而非取默认值）。
+func flagExplicit(fs *flag.FlagSet, name string) bool {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			explicit = true
+		}
+	})
+	return explicit
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -332,10 +368,26 @@ func listenWithDrift(addr string, maxAttempts int, logger *slog.Logger) (net.Lis
 		if err == nil {
 			return ln, candidate, i > 0, nil
 		}
-		if !errors.Is(err, syscall.EADDRINUSE) {
+		if !isAddrInUse(err) {
 			return nil, 0, false, fmt.Errorf("listen %s: %w", laddr, err)
 		}
 		logger.Warn("http port busy, drifting to next", "busy", laddr, "next", candidate+1)
 	}
 	return nil, 0, false, fmt.Errorf("ports %d-%d all busy on %s", port, port+maxAttempts-1, host)
+}
+
+// wsaEADDRINUSE 是 Windows 上 bind 冲突的 errno（syscall.WSAEADDRINUSE）。
+// 该常量仅存在于 Windows 的 syscall 包，为保持跨平台编译此处用数值。
+const wsaEADDRINUSE = 10048
+
+// isAddrInUse 判断监听失败是否为端口占用。
+// Windows 上 syscall.EADDRINUSE 是与 WSAEADDRINUSE 不同的占位值，
+// bind 冲突实际返回 WSAEADDRINUSE，因此两类错误都要识别，
+// 否则端口漂移在 Windows 上永远不生效。
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && uintptr(errno) == wsaEADDRINUSE
 }

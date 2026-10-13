@@ -11,6 +11,10 @@ import (
 
 func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 	root := t.TempDir()
+	// Windows 无管理员/开发者模式权限时 os.Symlink 会失败（错误此前被忽略，
+	// 导致 Kind 断言在 Windows 必挂）。记录可用性，Kind 断言仅在符号链接
+	// 可创建时执行；Linux CI 上始终完整覆盖。
+	canSymlink := true
 	// 构造：video0 = USB 主摄像头（index 0），video1 = 同一 USB 设备的元数据节点
 	//（index 1，应被过滤），video2 = PCIe 内置摄像头（index 0）。
 	makeNode := func(base, name, index, deviceLink string) {
@@ -25,7 +29,9 @@ func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 			_ = os.WriteFile(filepath.Join(dir, "index"), []byte(index), 0o644)
 		}
 		if deviceLink != "" {
-			_ = os.Symlink(deviceLink, filepath.Join(dir, "device"))
+			if err := os.Symlink(deviceLink, filepath.Join(dir, "device")); err != nil {
+				canSymlink = false
+			}
 		}
 	}
 	makeNode("video0", "USB2.0 HD UVC WebCam", "0",
@@ -54,11 +60,16 @@ func TestListV4L2DevicesWithFakeTree(t *testing.T) {
 	if devices[0].Source != filepath.Join(devDir, "video0") || devices[0].Name != "USB2.0 HD UVC WebCam" {
 		t.Fatalf("device0: %+v", devices[0])
 	}
-	if devices[0].Type != string(config.TypeV4L2) || devices[0].Kind != kindUSB {
+	if devices[0].Type != string(config.TypeV4L2) {
 		t.Fatalf("device0 meta: %+v", devices[0])
 	}
-	if devices[1].Kind != kindBuiltin {
-		t.Fatalf("device2 should be builtin: %+v", devices[1])
+	if canSymlink {
+		if devices[0].Kind != kindUSB {
+			t.Fatalf("device0 meta: %+v", devices[0])
+		}
+		if devices[1].Kind != kindBuiltin {
+			t.Fatalf("device2 should be builtin: %+v", devices[1])
+		}
 	}
 }
 
@@ -287,5 +298,71 @@ func TestScreenInputArgsPerPlatform(t *testing.T) {
 	got = strings.Join(screenInputArgsFor("linux", config.Camera{Type: config.TypeScreen, Source: ":0.1"}), " ")
 	if !strings.Contains(got, "-i :0.1") {
 		t.Fatalf("explicit display: %q", got)
+	}
+}
+
+// TestParseXrandrScreens 解析 xrandr 已连接行内的几何信息，生成按显示器采集源。
+func TestParseXrandrScreens(t *testing.T) {
+	sample := `Screen 0: minimum 320 x 200, current 4480 x 1440, maximum 16384 x 16384
+eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 309mm x 174mm
+HDMI-1 connected 2560x1440+1920+0 (normal left inverted right x axis y axis) 597mm x 336mm
+DP-1 disconnected (normal left inverted right x axis y axis)
+`
+	devices := parseXrandrScreens(sample)
+	if len(devices) != 2 {
+		t.Fatalf("devices = %+v, want 2 (disconnected 忽略)", devices)
+	}
+	if devices[0].Source != ":0.0+0,0@1920x1080" || devices[0].Type != string(config.TypeScreen) {
+		t.Fatalf("device0: %+v", devices[0])
+	}
+	if devices[1].Source != ":0.0+1920,0@2560x1440" {
+		t.Fatalf("device1 source: %+v", devices[1])
+	}
+	if !strings.Contains(devices[1].Name, "2560×1440") {
+		t.Fatalf("device1 name should carry size: %+v", devices[1])
+	}
+	// 无几何信息（如 xrandr 异常输出）时回退整屏 :0.0。
+	devices = parseXrandrScreens("eDP-1 connected primary unknown")
+	if len(devices) != 1 || devices[0].Source != ":0.0" {
+		t.Fatalf("fallback: %+v", devices)
+	}
+}
+
+// TestScreenInputArgsMonitorRect Windows 指定显示器（desktop@X,Y,WxH）：
+// 偏移 + 按显示器尺寸裁剪；用户显式分辨率优先。
+func TestScreenInputArgsMonitorRect(t *testing.T) {
+	cam := config.Camera{Type: config.TypeScreen, Source: "desktop@-3440,-40,2752x1152", Framerate: 15}
+	got := strings.Join(screenInputArgsFor("windows", cam), " ")
+	for _, want := range []string{
+		"-f gdigrab", "-offset_x -3440", "-offset_y -40", "-video_size 2752x1152", "-i desktop",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	// 用户显式配置分辨率时在显示器内裁剪该尺寸。
+	cam.Width, cam.Height = 1280, 720
+	got = strings.Join(screenInputArgsFor("windows", cam), " ")
+	for _, want := range []string{"-offset_x -3440", "-offset_y -40", "-video_size 1280x720"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("override missing %q in %q", want, got)
+		}
+	}
+}
+
+// TestScreenInputArgsX11Monitor Linux 指定显示器（:0.0+X,Y@WxH）。
+func TestScreenInputArgsX11Monitor(t *testing.T) {
+	cam := config.Camera{Type: config.TypeScreen, Source: ":0.0+1920,0@2560x1440", Framerate: 15}
+	got := strings.Join(screenInputArgsFor("linux", cam), " ")
+	for _, want := range []string{"-f x11grab", "-video_size 2560x1440", "-i :0.0+1920,0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	// 用户显式配置分辨率时优先。
+	cam.Width, cam.Height = 1280, 720
+	got = strings.Join(screenInputArgsFor("linux", cam), " ")
+	if !strings.Contains(got, "-video_size 1280x720") {
+		t.Fatalf("override: %q", got)
 	}
 }
