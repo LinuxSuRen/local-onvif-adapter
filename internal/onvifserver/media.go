@@ -22,11 +22,42 @@ func registerMediaOps() {
 	reg(nsMedia, "GetStreamUri", withProfileToken(opGetStreamUri))
 	reg(nsMedia, "GetSnapshotUri", withProfileToken(opGetSnapshotUri))
 	reg(nsMedia, "GetAudioSources", func(s *Service, _ []byte) (string, error) {
-		return `<trt:GetAudioSourcesResponse/>`, nil
+		body := `<trt:GetAudioSourcesResponse>`
+		for _, v := range s.EnabledViews() {
+			if !v.Camera.AudioEnabled {
+				continue
+			}
+			body += `<trt:Sources token="` + v.AudioSourceToken + `">` +
+				`<tt:Name>` + xmlEsc(v.Camera.Name) + `</tt:Name></trt:Sources>`
+		}
+		return body + `</trt:GetAudioSourcesResponse>`, nil
 	})
+	reg(nsMedia, "GetAudioSourceConfigurations", func(s *Service, _ []byte) (string, error) {
+		body := `<trt:GetAudioSourceConfigurationsResponse>`
+		for _, v := range s.EnabledViews() {
+			if !v.Camera.AudioEnabled {
+				continue
+			}
+			body += audioSourceCfgXML(v, "Configurations")
+		}
+		return body + `</trt:GetAudioSourceConfigurationsResponse>`, nil
+	})
+	reg(nsMedia, "GetAudioSourceConfiguration", withAudioSourceToken(func(s *Service, v CameraView) (string, error) {
+		return `<trt:GetAudioSourceConfigurationResponse>` + audioSourceCfgXML(v, "Configuration") + `</trt:GetAudioSourceConfigurationResponse>`, nil
+	}))
 	reg(nsMedia, "GetAudioEncoderConfigurations", func(s *Service, _ []byte) (string, error) {
-		return `<trt:GetAudioEncoderConfigurationsResponse/>`, nil
+		body := `<trt:GetAudioEncoderConfigurationsResponse>`
+		for _, v := range s.EnabledViews() {
+			if !v.Camera.AudioEnabled {
+				continue
+			}
+			body += audioEncoderCfgXML(v, "Configurations")
+		}
+		return body + `</trt:GetAudioEncoderConfigurationsResponse>`, nil
 	})
+	reg(nsMedia, "GetAudioEncoderConfiguration", withAudioEncoderToken(func(s *Service, v CameraView) (string, error) {
+		return `<trt:GetAudioEncoderConfigurationResponse>` + audioEncoderCfgXML(v, "Configuration") + `</trt:GetAudioEncoderConfigurationResponse>`, nil
+	}))
 	reg(nsMedia, "GetServiceCapabilities", mediaCaps)
 	reg(nsMedia, "GetVideoSourceConfiguration", withVSCfgToken(func(s *Service, v CameraView) (string, error) {
 		return `<trt:GetVideoSourceConfigurationResponse>` + videoSourceCfgXML(v, "Configuration") + `</trt:GetVideoSourceConfigurationResponse>`, nil
@@ -149,6 +180,42 @@ func withVSCfgToken(fn func(s *Service, v CameraView) (string, error)) opHandler
 	}
 }
 
+// withAudioSourceToken 按音频源 token 定位摄像头（仅启用音频的摄像头可命中）。
+func withAudioSourceToken(fn func(s *Service, v CameraView) (string, error)) opHandler {
+	return func(s *Service, inner []byte) (string, error) {
+		var req struct {
+			ConfigurationToken string `xml:"ConfigurationToken"`
+		}
+		if err := parseInner(inner, &req); err != nil {
+			return "", err
+		}
+		for _, v := range s.EnabledViews() {
+			if v.Camera.AudioEnabled && v.AudioSourceToken == req.ConfigurationToken {
+				return fn(s, v)
+			}
+		}
+		return "", fmt.Errorf("audio source configuration %q not found", req.ConfigurationToken)
+	}
+}
+
+// withAudioEncoderToken 按音频编码 token 定位摄像头（仅启用音频的摄像头可命中）。
+func withAudioEncoderToken(fn func(s *Service, v CameraView) (string, error)) opHandler {
+	return func(s *Service, inner []byte) (string, error) {
+		var req struct {
+			ConfigurationToken string `xml:"ConfigurationToken"`
+		}
+		if err := parseInner(inner, &req); err != nil {
+			return "", err
+		}
+		for _, v := range s.EnabledViews() {
+			if v.Camera.AudioEnabled && v.AudioEncoderToken == req.ConfigurationToken {
+				return fn(s, v)
+			}
+		}
+		return "", fmt.Errorf("audio encoder configuration %q not found", req.ConfigurationToken)
+	}
+}
+
 // ---- 响应构造 ----
 
 func opGetProfiles(s *Service, _ []byte) (string, error) {
@@ -171,7 +238,40 @@ func profileXML(v CameraView) string {
 		// 所有 profile 默认携带 PTZConfiguration（mock 云台）：
 		// 客户端以其存在判定 PTZ 可用，固定枪机不提供会在调用时报 Fault。
 		ptzCfgXML(v) +
+		audioCfgXMLIfEnabled(v) +
 		`</trt:Profiles>`
+}
+
+// audioCfgXMLIfEnabled 启用音频的摄像头在 profile 中声明音频源与音频编码配置；
+// 未启用返回空（客户端据此判定该通道无音频）。
+// 采样率/码率与 ffmpeg 实际输出一致（44.1kHz / 64kbps，见 runner audioEncodeArgs）。
+func audioCfgXMLIfEnabled(v CameraView) string {
+	if !v.Camera.AudioEnabled {
+		return ""
+	}
+	return audioSourceCfgXML(v, "AudioSourceConfiguration") + audioEncoderCfgXML(v, "AudioEncoderConfiguration")
+}
+
+// audioSourceCfgXML 生成音频源配置；元素名按场景区分
+// （profile 内 AudioSourceConfiguration，单查 Configuration，列表 Configurations）。
+func audioSourceCfgXML(v CameraView, elem string) string {
+	return `<trt:` + elem + ` token="` + v.AudioSourceToken + `">` +
+		`<tt:Name>Audio</tt:Name><tt:UseCount>1</tt:UseCount>` +
+		`<tt:SourceToken>` + v.AudioSourceToken + `</tt:SourceToken>` +
+		`</trt:` + elem + `>`
+}
+
+// audioEncoderCfgXML 生成音频编码配置（AAC，参数与 ffmpeg 输出一致）。
+func audioEncoderCfgXML(v CameraView, elem string) string {
+	return `<trt:` + elem + ` token="` + v.AudioEncoderToken + `">` +
+		`<tt:Name>Audio</tt:Name><tt:UseCount>1</tt:UseCount>` +
+		`<tt:Encoding>AAC</tt:Encoding>` +
+		`<tt:Bitrate>` + strconv.Itoa(v.Camera.AudioBitrate()) + `</tt:Bitrate>` +
+		`<tt:SampleRate>` + strconv.Itoa(v.Camera.AudioSampleRate()) + `</tt:SampleRate>` +
+		`<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>` +
+		`<tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>` +
+		`<tt:SessionTimeout>PT5S</tt:SessionTimeout>` +
+		`</trt:` + elem + `>`
 }
 
 // videoSourceCfgXML 生成视频源配置；元素名按场景区分：

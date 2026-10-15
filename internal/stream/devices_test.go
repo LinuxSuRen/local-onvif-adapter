@@ -228,6 +228,54 @@ func TestParseAVFDevicesNewFormat(t *testing.T) {
 	}
 }
 
+// TestParseDShowAudioDevices 新旧格式下的音频设备解析（跳过视频与纯视频设备）。
+func TestParseDShowAudioDevices(t *testing.T) {
+	sample := `[in#0 @ x] "WL24A" (video)
+[in#0 @ x]   Alternative name "@device_pnp_x"
+[in#0 @ x] "麦克风 (2- WL24A)" (audio)
+[in#0 @ x]   Alternative name "@device_cm_x"
+[in#0 @ x] "麦克风 (WL24A)" (audio)
+[in#0 @ x] "Camera (Front)" (video, audio)
+`
+	devices := parseDShowAudioDevices(sample)
+	if len(devices) != 2 {
+		t.Fatalf("devices = %+v, want 2", devices)
+	}
+	if devices[0].Name != "麦克风 (2- WL24A)" || devices[1].Name != "麦克风 (WL24A)" {
+		t.Fatalf("audio device names: %+v", devices)
+	}
+	// 旧格式：按分节标题。
+	old := `[dshow @ x]  DirectShow video devices
+[dshow @ x]  "Integrated Camera"
+[dshow @ x]  DirectShow audio devices
+[dshow @ x]  "Microphone (Realtek Audio)"
+`
+	devices = parseDShowAudioDevices(old)
+	if len(devices) != 1 || devices[0].Name != "Microphone (Realtek Audio)" {
+		t.Fatalf("old format audio devices: %+v", devices)
+	}
+}
+
+// TestParseAVFAudioDevices avfoundation 音频段解析。
+func TestParseAVFAudioDevices(t *testing.T) {
+	sample := `[avfoundation @ x] AVFoundation video devices:
+[avfoundation @ x] [0] FaceTime HD Camera
+[avfoundation @ x] AVFoundation audio devices:
+[avfoundation @ x] [0] MacBook Pro Microphone
+[avfoundation @ x] [1] USB PnP Sound Device
+`
+	devices := parseAVFAudioDevices(sample)
+	if len(devices) != 2 {
+		t.Fatalf("devices = %+v, want 2", devices)
+	}
+	if devices[0].Source != "0" || devices[0].Name != "MacBook Pro Microphone" {
+		t.Fatalf("device0: %+v", devices[0])
+	}
+	if devices[1].Source != "1" || devices[1].Name != "USB PnP Sound Device" {
+		t.Fatalf("device1: %+v", devices[1])
+	}
+}
+
 func TestGuessKind(t *testing.T) {
 	cases := map[string]string{
 		"FaceTime HD Camera":   kindBuiltin,

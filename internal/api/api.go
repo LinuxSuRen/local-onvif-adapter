@@ -145,6 +145,7 @@ func (s *Server) handleUpdateRTSPPort(w http.ResponseWriter, r *http.Request) {
 		"restart_required": restartRequired,
 	})
 }
+
 // handleUpdateAuth 更新设备面认证（ONVIF SOAP + RTSP 共用账号）。
 // 变更后重启全部取流进程：ffmpeg 推流地址需要按新凭证重建 userinfo。
 func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
@@ -251,15 +252,17 @@ func (s *Server) handleListCameras(w http.ResponseWriter, _ *http.Request) {
 }
 
 type cameraInput struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Source      string `json:"source"`
-	Width       *int   `json:"width"`
-	Height      *int   `json:"height"`
-	Framerate   *int   `json:"framerate"`
-	BitrateKBPS *int   `json:"bitrate_kbps"`
-	Infrared    *bool  `json:"infrared"`
-	Enabled     *bool  `json:"enabled"`
+	Name         string  `json:"name"`
+	Type         string  `json:"type"`
+	Source       string  `json:"source"`
+	Width        *int    `json:"width"`
+	Height       *int    `json:"height"`
+	Framerate    *int    `json:"framerate"`
+	BitrateKBPS  *int    `json:"bitrate_kbps"`
+	Infrared     *bool   `json:"infrared"`
+	AudioEnabled *bool   `json:"audio_enabled"`
+	AudioSource  *string `json:"audio_source"`
+	Enabled      *bool   `json:"enabled"`
 }
 
 func (in *cameraInput) validate() error {
@@ -403,6 +406,12 @@ func applyInput(cam *config.Camera, in *cameraInput) {
 	if in.Infrared != nil {
 		cam.Infrared = *in.Infrared
 	}
+	if in.AudioEnabled != nil {
+		cam.AudioEnabled = *in.AudioEnabled
+	}
+	if in.AudioSource != nil {
+		cam.AudioSource = strings.TrimSpace(*in.AudioSource)
+	}
 	if in.Enabled != nil {
 		cam.Enabled = *in.Enabled
 	}
@@ -454,9 +463,14 @@ func (s *Server) handleListDevices(w http.ResponseWriter, _ *http.Request) {
 	if devices == nil {
 		devices = []stream.Device{}
 	}
+	audioDevices := stream.ListLocalAudioDevices(bin)
+	if audioDevices == nil {
+		audioDevices = []stream.AudioDevice{}
+	}
 	writeData(w, http.StatusOK, map[string]any{
-		"devices":      devices,
-		"default_type": stream.DefaultLocalType(),
+		"devices":       devices,
+		"audio_devices": audioDevices,
+		"default_type":  stream.DefaultLocalType(),
 	})
 }
 
