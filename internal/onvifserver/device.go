@@ -54,6 +54,7 @@ func opGetServices(s *Service, _ []byte) (string, error) {
 		strings.ReplaceAll(serviceEntry("http://www.onvif.org/ver10/media/wsdl"), "%XADDR%", xaddr) +
 		strings.ReplaceAll(serviceEntry("http://www.onvif.org/ver20/ptz/wsdl"), "%XADDR%", xaddr) +
 		strings.ReplaceAll(serviceEntry("http://www.onvif.org/ver10/imaging/wsdl"), "%XADDR%", xaddr) +
+		strings.ReplaceAll(serviceEntry(nsEvents), "%XADDR%", xaddr) +
 		`</tds:GetServicesResponse>`
 	return body, nil
 }

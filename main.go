@@ -174,6 +174,12 @@ func main() {
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
 	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
 	apiSrv.RTSPBaseURL = withCreds(pushBase)
+	// 配置变更事件：任何成功保存（摄像头增删改/认证开关/编码参数）即发布审计信号
+	store.OnSaved = func() {
+		onvifserver.PublishEvent("lns:Config/Changed",
+			[]onvifserver.EventItem{{"Source", "Config"}},
+			[]onvifserver.EventItem{{"State", "Saved"}})
+	}
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。

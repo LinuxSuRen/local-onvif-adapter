@@ -15,6 +15,7 @@ import (
 	"github.com/bluenviron/gortsplib/v4/pkg/description"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
 	"github.com/bluenviron/gortsplib/v4/pkg/liberrors"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
 	"github.com/pion/rtp"
 )
 
@@ -187,6 +188,8 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 func (s *Server) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Response, *gortsplib.ServerStream, error) {
 	if !s.authz.verify(ctx.Request) {
 		s.logger.Info("rtsp describe unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
+		onvifserver.PublishEvent("lns:Security/AuthFailure",
+			[]onvifserver.EventItem{{"Service", "RTSP"}}, []onvifserver.EventItem{{"State", "Failed"}})
 		return s.authz.challenge(), nil, nil
 	}
 	e := s.lookup(ctx.Path, s.PublisherWait)
@@ -200,6 +203,9 @@ func (s *Server) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 // OnAnnounce 发布者通告：为路径创建流；已有发布者则踢旧接管（ffmpeg 重启场景）。
 func (s *Server) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
 	if !s.authz.verify(ctx.Request) {
+		// 不发 AuthFailure 事件：announce 是自家 ffmpeg 推流端的 401 重试握手
+		//（带凭证 URL 首次不带 Authorization 被挑战属正常流程），发布事件只会
+		// 造成每次启动一条自伤噪音；读者路径（describe/setup）的拒绝才是安全信号
 		s.logger.Info("rtsp announce unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
 		return s.authz.challenge(), nil
 	}
@@ -234,6 +240,8 @@ func (s *Server) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Re
 func (s *Server) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
 	if !s.authz.verify(ctx.Request) {
 		s.logger.Info("rtsp setup unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
+		onvifserver.PublishEvent("lns:Security/AuthFailure",
+			[]onvifserver.EventItem{{"Service", "RTSP"}}, []onvifserver.EventItem{{"State", "Failed"}})
 		return s.authz.challenge(), nil, nil
 	}
 	if ctx.Session.State() == gortsplib.ServerSessionStatePreRecord {
