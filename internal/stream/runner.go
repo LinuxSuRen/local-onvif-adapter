@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
 )
 
 // Status 单个摄像头取流进程的运行状态。
@@ -164,6 +165,7 @@ func (r *Runner) Spec() string { return r.spec }
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	cmd := r.cmd
+	r.cmd = nil
 	if !r.stopped {
 		r.stopped = true
 		close(r.stopCh)
@@ -186,13 +188,13 @@ func (r *Runner) Run() {
 	const maxBackoff = 15 * time.Second
 	var starts int
 	for !r.isStopped() {
-		args := BuildArgs(r.cam, r.pushAddr+r.camPath())
+		args := buildArgs(r.cam, r.pushAddr+r.camPath(), r.bin, r.logger)
 		cmd := exec.Command(r.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		var stderr tailBuffer
 		cmd.Stderr = &stderr
 
 		// macOS 屏幕采集：启动 screencapture 循环子进程，其 stdout 接到 ffmpeg 的 stdin。
-		// 用 os.Pipe() 手动建管道；ffmpeg 退出后（cmd.Run 返回）再关写端并 kill shell。
+		// 用 os.Pipe() 手动建管道；ffmpeg 退出后（cmd.Wait 返回）再关写端并 kill shell。
 		if r.cam.Type == config.TypeScreen && runtime.GOOS == "darwin" {
 			pr, pw, pipeErr := os.Pipe()
 			if pipeErr == nil {
@@ -215,14 +217,47 @@ func (r *Runner) Run() {
 		}
 
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
+		// 先 Start 再发布 r.cmd：cmd.Process 字段由 Start 写入，若在 Run() 之前
+		// 发布，Stop() 在锁外读 cmd.Process 会与 Start 的写构成数据竞争
+		//（go test -race 实测告警）。Start/Wait 分离后，Stop 只可能看到
+		// 「已启动的进程」或 nil；Kill 与 Wait 并发是 exec.CommandContext
+		// 的同款安全用法。
+		if startErr := cmd.Start(); startErr != nil {
+			r.setRunning(false, "ffmpeg start: "+startErr.Error(), &starts)
+			r.logger.Warn("ffmpeg start failed", "camera", r.cam.ID, "err", startErr.Error())
+			select {
+			case <-r.stopCh:
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
 		r.mu.Lock()
 		r.cmd = cmd
 		r.mu.Unlock()
 		r.setRunning(true, "", &starts)
+		// 事件：进程启动 = 信号恢复（重启后的第一拍）；Source/Lifecycle 记录启动序号
+		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
+			[]onvifserver.EventItem{{Name: "Source", Value: "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "State", Value: "false"}})
+		onvifserver.PublishEvent("lns:Source/Lifecycle",
+			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "Phase", Value: "Started"}, {Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)}})
 		started := time.Now()
-		err := cmd.Run()
+		err := cmd.Wait()
+		// 进程已结束：摘除句柄，Stop 不再 Kill 已回收的进程
+		//（Kill 已结束进程会返回 ErrProcessDone，无害但没必要）。
+		r.mu.Lock()
+		if r.cmd == cmd {
+			r.cmd = nil
+		}
+		r.mu.Unlock()
 		if r.isStopped() {
 			r.setRunning(false, "", &starts)
+			onvifserver.PublishEvent("lns:Source/Lifecycle",
+				[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+				[]onvifserver.EventItem{{Name: "Phase", Value: "Stopped"}})
 			return
 		}
 		msg := ""
@@ -235,6 +270,15 @@ func (r *Runner) Run() {
 		r.setRunning(false, msg, &starts)
 		r.logger.Warn("ffmpeg exited, restarting", "camera", r.cam.ID, "err", msg,
 			"uptime", time.Since(started).Round(time.Second).String())
+		// 事件：非预期退出 = 信号丢失（NVR 区分「相机挂了」与「网络挂了」）+ 重启中
+		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
+			[]onvifserver.EventItem{{Name: "Source", Value: "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "State", Value: "true"}})
+		onvifserver.PublishEvent("lns:Source/Lifecycle",
+			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "Phase", Value: "Restarting"},
+				{Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)},
+				{Name: "Error", Value: trimEvent(msg, 120)}})
 		select {
 		case <-r.stopCh:
 			return
@@ -286,6 +330,18 @@ func (t *tailBuffer) Tail() string {
 }
 
 func (r *Runner) camPath() string { return "/cam/" + r.cam.ID }
+
+// trimEvent 截断错误文本用于事件载荷（stderr 尾巴可能很长，事件只要可读线索）。
+func trimEvent(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		s = s[len(s)-n:]
+		if i := strings.Index(s, " "); i > 0 {
+			s = s[i+1:]
+		}
+	}
+	return s
+}
 
 // InputArgs 按摄像头类型构造 ffmpeg 输入参数。
 // 启用音频时按平台把麦克风并入输入（dshow 联合输入 / avfoundation 双索引 /
@@ -464,8 +520,14 @@ func darwinScreenCmd(c config.Camera) string {
 	)
 }
 
-// BuildArgs 构造完整的 ffmpeg 取流推流命令参数。
+// BuildArgs 构造完整的 ffmpeg 取流推流命令参数（编码器按默认 auto 解析，
+// 仅供测试与兼容旧调用；运行路径请用 buildArgs 传入实际 bin 与 logger）。
 func BuildArgs(c config.Camera, pushURL string) []string {
+	return buildArgs(c, pushURL, "ffmpeg", nil)
+}
+
+// buildArgs 构造完整的 ffmpeg 取流推流命令参数（含编码器选择与帧率兜底）。
+func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []string {
 	fps := c.FramerateOrDefault()
 	gov := fps * 2
 	if gov < 10 {
@@ -477,20 +539,18 @@ func BuildArgs(c config.Camera, pushURL string) []string {
 		args = append(args, "-nostdin")
 	}
 	args = append(args, InputArgs(c)...)
-	// macOS 屏幕采集的 PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限，
-	// 缩放到 1280 宽保证实时性（未配置分辨率时）。
-	if c.Type == config.TypeScreen && runtime.GOOS == "darwin" && c.Width == 0 {
+	// 屏幕采集未配置分辨率时统一缩放到 1280 宽：
+	//   - macOS：PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限；
+	//   - Windows/Linux：多屏全分辨率（如 2752×1152）多路并发时浏览器
+	//     GPU 硬解扛不住，实测 5 路（含 3 路巨分辨率）在 Edge/Chrome 中
+	//     解码管线反复失效表现为画面闪烁；降到 1280 宽后硬解可稳定承载。
+	if c.Type == config.TypeScreen && c.Width == 0 {
 		args = append(args, "-vf", "scale=1280:-2")
 	}
-	args = append(args,
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
-		"-pix_fmt", "yuv420p",
-		"-g", fmt.Sprintf("%d", gov),
-		"-b:v", fmt.Sprintf("%dk", c.BitrateOrDefault()),
-	)
+	args = append(args, videoEncodeArgs(resolveEncoder(bin, logger), gov, c.BitrateOrDefault())...)
 	args = append(args, audioEncodeArgs(c)...)
+	args = append(args, fpsGuaranteeArgs(c)...)
+	args = append(args, resolutionGuaranteeArgs(c)...)
 	args = append(args,
 		"-f", "rtsp",
 		"-rtsp_transport", "tcp",

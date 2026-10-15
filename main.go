@@ -53,6 +53,7 @@ func main() {
 		rtspServer  = flag.Bool("rtsp-server", envBool("RTSP_SERVER", true), "启用内嵌 RTSP 服务器；关闭后按 --rtsp-push 推给外部 mediamtx")
 		dataDir     = flag.String("data-dir", envOr("DATA_DIR", "./data"), "配置持久化目录")
 		ffmpegBin   = flag.String("ffmpeg-bin", envOr("FFMPEG_BIN", "ffmpeg"), "ffmpeg 可执行文件路径")
+		videoEnc    = flag.String("video-encoder", envOr("VIDEO_ENCODER", "auto"), "视频编码器：auto（libx264）| libx264 | h264_v4l2m2m（V4L2 硬件编码，实验性，见 README 实测说明）")
 		discoveryOn = flag.Bool("discovery", envBool("DISCOVERY", true), "是否开启 WS-Discovery")
 		logLevel    = flag.String("log-level", envOr("LOG_LEVEL", "info"), "日志级别 debug|info|warn|error")
 		showVersion = flag.Bool("version", false, "打印版本并退出")
@@ -66,6 +67,11 @@ func main() {
 
 	logger := newLogger(*logLevel)
 	slog.SetDefault(logger)
+
+	if err := stream.SetVideoEncoder(*videoEnc); err != nil {
+		logger.Error("invalid video encoder", "err", err.Error())
+		os.Exit(1)
+	}
 
 	store, err := config.LoadStore(*dataDir)
 	if err != nil {
@@ -168,6 +174,15 @@ func main() {
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
 	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
 	apiSrv.RTSPBaseURL = withCreds(pushBase)
+	// 配置变更事件：任何成功保存（摄像头增删改/认证开关/编码参数）即发布审计信号
+	store.OnSaved = func() {
+		onvifserver.PublishEvent("lns:Config/Changed",
+			[]onvifserver.EventItem{{Name: "Source", Value: "Config"}},
+			[]onvifserver.EventItem{{Name: "State", Value: "Saved"}})
+	}
+	// 宿主机资源监控（带算力相机视角：CPU/内存/磁盘/温度 = 相机内部资源）
+	// 只在跨越阈值时发布事件（滞回防抖），30s 采集周期
+	onvifserver.StartSystemMonitor(*dataDir, logger)
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。

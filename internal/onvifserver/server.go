@@ -32,6 +32,7 @@ func init() {
 	registerMediaOps()
 	registerPTZOps()
 	registerImagingOps()
+	registerEventsOps()
 }
 
 func reg(ns, op string, h opHandler) {
@@ -69,6 +70,19 @@ func (s *Service) Handler() http.Handler {
 			writeSOAP(w, soapFault("ter:InvalidArgVal", "read SOAP request: "+err.Error()))
 			return
 		}
+		// PullPoint 订阅地址路由：/onvif/sub_N 上的请求按订阅操作分发
+		//（应答为完整事件信封；认证与主端点同策略）
+		if subID := subIDFromPath(r.URL.Path); subID != "" {
+			resp, status, ok := s.handlePullPoint(subID, body)
+			if !ok {
+				w.WriteHeader(status)
+				return
+			}
+			w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(resp)
+			return
+		}
 		req, err := parseSOAPBody(body)
 		if err != nil {
 			s.logger.Warn("onvif request parse failed", "err", err.Error(), "remote", r.RemoteAddr)
@@ -78,6 +92,8 @@ func (s *Service) Handler() http.Handler {
 		if user, pass, ok := s.store.Root().Server.AuthCreds(); ok &&
 			!preAuthOps[req.Op] && !verifyUsernameToken(body, user, pass) {
 			s.logger.Info("onvif op unauthorized", "op", req.Op, "remote", r.RemoteAddr)
+			PublishEvent("lns:Security/AuthFailure",
+				[]EventItem{{Name: "Service", Value: "ONVIF"}}, []EventItem{{Name: "State", Value: "Failed"}})
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
