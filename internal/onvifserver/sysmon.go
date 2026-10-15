@@ -82,13 +82,13 @@ func (m *SystemMonitor) checkCPU() {
 	if !m.cpuHigh && p > cpuHighPercent {
 		m.cpuHigh = true
 		PublishEvent("lns:System/CPU",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "High"}, {"Load", fmt.Sprintf("%.0f%%", p)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "High"}, {Name: "Load", Value: fmt.Sprintf("%.0f%%", p)}})
 	} else if m.cpuHigh && p < cpuLowPercent {
 		m.cpuHigh = false
 		PublishEvent("lns:System/CPU",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "Normal"}, {"Load", fmt.Sprintf("%.0f%%", p)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "Normal"}, {Name: "Load", Value: fmt.Sprintf("%.0f%%", p)}})
 	}
 }
 
@@ -102,17 +102,17 @@ func (m *SystemMonitor) checkMemory() {
 	if !m.memHigh && used > memHighPercent {
 		m.memHigh = true
 		PublishEvent("lns:System/Memory",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "High"},
-				{"Used", fmt.Sprintf("%.0f%%", used)},
-				{"Available", fmt.Sprintf("%dMB", availMB)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "High"},
+				{Name: "Used", Value: fmt.Sprintf("%.0f%%", used)},
+				{Name: "Available", Value: fmt.Sprintf("%dMB", availMB)}})
 	} else if m.memHigh && used < memLowPercent {
 		m.memHigh = false
 		PublishEvent("lns:System/Memory",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "Normal"},
-				{"Used", fmt.Sprintf("%.0f%%", used)},
-				{"Available", fmt.Sprintf("%dMB", availMB)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "Normal"},
+				{Name: "Used", Value: fmt.Sprintf("%.0f%%", used)},
+				{Name: "Available", Value: fmt.Sprintf("%dMB", availMB)}})
 	}
 }
 
@@ -125,13 +125,13 @@ func (m *SystemMonitor) checkDisk() {
 	if !m.diskLow && du.Free < diskLowBytes {
 		m.diskLow = true
 		PublishEvent("lns:System/Disk",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "Low"}, {"Free", fmt.Sprintf("%dMB", freeMB)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "Low"}, {Name: "Free", Value: fmt.Sprintf("%dMB", freeMB)}})
 	} else if m.diskLow && du.Free > diskRestoreBytes {
 		m.diskLow = false
 		PublishEvent("lns:System/Disk",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "Normal"}, {"Free", fmt.Sprintf("%dMB", freeMB)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "Normal"}, {Name: "Free", Value: fmt.Sprintf("%dMB", freeMB)}})
 	}
 }
 
@@ -154,12 +154,12 @@ func (m *SystemMonitor) checkTemperature() {
 	if !m.tempHigh && max > tempHighCelsius {
 		m.tempHigh = true
 		PublishEvent("lns:System/Temperature",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "High"}, {"Temp", fmt.Sprintf("%.0f°C", max)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "High"}, {Name: "Temp", Value: fmt.Sprintf("%.0f°C", max)}})
 	} else if m.tempHigh && max < tempLowCelsius {
 		m.tempHigh = false
 		PublishEvent("lns:System/Temperature",
-			[]EventItem{{"Source", "Host"}},
-			[]EventItem{{"State", "Normal"}, {"Temp", fmt.Sprintf("%.0f°C", max)}})
+			[]EventItem{{Name: "Source", Value: "Host"}},
+			[]EventItem{{Name: "State", Value: "Normal"}, {Name: "Temp", Value: fmt.Sprintf("%.0f°C", max)}})
 	}
 }

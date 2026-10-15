@@ -189,7 +189,7 @@ func (s *Server) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx) (*base.Re
 	if !s.authz.verify(ctx.Request) {
 		s.logger.Info("rtsp describe unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
 		onvifserver.PublishEvent("lns:Security/AuthFailure",
-			[]onvifserver.EventItem{{"Service", "RTSP"}}, []onvifserver.EventItem{{"State", "Failed"}})
+			[]onvifserver.EventItem{{Name: "Service", Value: "RTSP"}}, []onvifserver.EventItem{{Name: "State", Value: "Failed"}})
 		return s.authz.challenge(), nil, nil
 	}
 	e := s.lookup(ctx.Path, s.PublisherWait)
@@ -241,7 +241,7 @@ func (s *Server) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 	if !s.authz.verify(ctx.Request) {
 		s.logger.Info("rtsp setup unauthorized", "remote", fmt.Sprintf("%v", ctx.Conn.NetConn().RemoteAddr()))
 		onvifserver.PublishEvent("lns:Security/AuthFailure",
-			[]onvifserver.EventItem{{"Service", "RTSP"}}, []onvifserver.EventItem{{"State", "Failed"}})
+			[]onvifserver.EventItem{{Name: "Service", Value: "RTSP"}}, []onvifserver.EventItem{{Name: "State", Value: "Failed"}})
 		return s.authz.challenge(), nil, nil
 	}
 	if ctx.Session.State() == gortsplib.ServerSessionStatePreRecord {

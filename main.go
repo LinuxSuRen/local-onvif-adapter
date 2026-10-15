@@ -177,8 +177,8 @@ func main() {
 	// 配置变更事件：任何成功保存（摄像头增删改/认证开关/编码参数）即发布审计信号
 	store.OnSaved = func() {
 		onvifserver.PublishEvent("lns:Config/Changed",
-			[]onvifserver.EventItem{{"Source", "Config"}},
-			[]onvifserver.EventItem{{"State", "Saved"}})
+			[]onvifserver.EventItem{{Name: "Source", Value: "Config"}},
+			[]onvifserver.EventItem{{Name: "State", Value: "Saved"}})
 	}
 	// 宿主机资源监控（带算力相机视角：CPU/内存/磁盘/温度 = 相机内部资源）
 	// 只在跨越阈值时发布事件（滞回防抖），30s 采集周期

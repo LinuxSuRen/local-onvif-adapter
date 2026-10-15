@@ -93,7 +93,7 @@ func (s *Service) Handler() http.Handler {
 			!preAuthOps[req.Op] && !verifyUsernameToken(body, user, pass) {
 			s.logger.Info("onvif op unauthorized", "op", req.Op, "remote", r.RemoteAddr)
 			PublishEvent("lns:Security/AuthFailure",
-				[]EventItem{{"Service", "ONVIF"}}, []EventItem{{"State", "Failed"}})
+				[]EventItem{{Name: "Service", Value: "ONVIF"}}, []EventItem{{Name: "State", Value: "Failed"}})
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}

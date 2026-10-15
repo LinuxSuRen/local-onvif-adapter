@@ -222,18 +222,18 @@ func (r *Runner) Run() {
 		r.setRunning(true, "", &starts)
 		// 事件：进程启动 = 信号恢复（重启后的第一拍）；Source/Lifecycle 记录启动序号
 		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
-			[]onvifserver.EventItem{{"Source", "Camera_" + r.cam.ID}},
-			[]onvifserver.EventItem{{"State", "false"}})
+			[]onvifserver.EventItem{{Name: "Source", Value: "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "State", Value: "false"}})
 		onvifserver.PublishEvent("lns:Source/Lifecycle",
-			[]onvifserver.EventItem{{"Camera", r.cam.ID}},
-			[]onvifserver.EventItem{{"Phase", "Started"}, {"Restarts", fmt.Sprintf("%d", starts-1)}})
+			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "Phase", Value: "Started"}, {Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)}})
 		started := time.Now()
 		err := cmd.Run()
 		if r.isStopped() {
 			r.setRunning(false, "", &starts)
 			onvifserver.PublishEvent("lns:Source/Lifecycle",
-				[]onvifserver.EventItem{{"Camera", r.cam.ID}},
-				[]onvifserver.EventItem{{"Phase", "Stopped"}})
+				[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+				[]onvifserver.EventItem{{Name: "Phase", Value: "Stopped"}})
 			return
 		}
 		msg := ""
@@ -248,13 +248,13 @@ func (r *Runner) Run() {
 			"uptime", time.Since(started).Round(time.Second).String())
 		// 事件：非预期退出 = 信号丢失（NVR 区分「相机挂了」与「网络挂了」）+ 重启中
 		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
-			[]onvifserver.EventItem{{"Source", "Camera_" + r.cam.ID}},
-			[]onvifserver.EventItem{{"State", "true"}})
+			[]onvifserver.EventItem{{Name: "Source", Value: "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "State", Value: "true"}})
 		onvifserver.PublishEvent("lns:Source/Lifecycle",
-			[]onvifserver.EventItem{{"Camera", r.cam.ID}},
-			[]onvifserver.EventItem{{"Phase", "Restarting"},
-				{"Restarts", fmt.Sprintf("%d", starts-1)},
-				{"Error", trimEvent(msg, 120)}})
+			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
+			[]onvifserver.EventItem{{Name: "Phase", Value: "Restarting"},
+				{Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)},
+				{Name: "Error", Value: trimEvent(msg, 120)}})
 		select {
 		case <-r.stopCh:
 			return
