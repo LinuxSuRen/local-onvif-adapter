@@ -165,6 +165,7 @@ func (r *Runner) Spec() string { return r.spec }
 func (r *Runner) Stop() {
 	r.mu.Lock()
 	cmd := r.cmd
+	r.cmd = nil
 	if !r.stopped {
 		r.stopped = true
 		close(r.stopCh)
@@ -193,7 +194,7 @@ func (r *Runner) Run() {
 		cmd.Stderr = &stderr
 
 		// macOS 屏幕采集：启动 screencapture 循环子进程，其 stdout 接到 ffmpeg 的 stdin。
-		// 用 os.Pipe() 手动建管道；ffmpeg 退出后（cmd.Run 返回）再关写端并 kill shell。
+		// 用 os.Pipe() 手动建管道；ffmpeg 退出后（cmd.Wait 返回）再关写端并 kill shell。
 		if r.cam.Type == config.TypeScreen && runtime.GOOS == "darwin" {
 			pr, pw, pipeErr := os.Pipe()
 			if pipeErr == nil {
@@ -216,6 +217,22 @@ func (r *Runner) Run() {
 		}
 
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
+		// 先 Start 再发布 r.cmd：cmd.Process 字段由 Start 写入，若在 Run() 之前
+		// 发布，Stop() 在锁外读 cmd.Process 会与 Start 的写构成数据竞争
+		//（go test -race 实测告警）。Start/Wait 分离后，Stop 只可能看到
+		// 「已启动的进程」或 nil；Kill 与 Wait 并发是 exec.CommandContext
+		// 的同款安全用法。
+		if startErr := cmd.Start(); startErr != nil {
+			r.setRunning(false, "ffmpeg start: "+startErr.Error(), &starts)
+			r.logger.Warn("ffmpeg start failed", "camera", r.cam.ID, "err", startErr.Error())
+			select {
+			case <-r.stopCh:
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
 		r.mu.Lock()
 		r.cmd = cmd
 		r.mu.Unlock()
@@ -228,7 +245,14 @@ func (r *Runner) Run() {
 			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
 			[]onvifserver.EventItem{{Name: "Phase", Value: "Started"}, {Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)}})
 		started := time.Now()
-		err := cmd.Run()
+		err := cmd.Wait()
+		// 进程已结束：摘除句柄，Stop 不再 Kill 已回收的进程
+		//（Kill 已结束进程会返回 ErrProcessDone，无害但没必要）。
+		r.mu.Lock()
+		if r.cmd == cmd {
+			r.cmd = nil
+		}
+		r.mu.Unlock()
 		if r.isStopped() {
 			r.setRunning(false, "", &starts)
 			onvifserver.PublishEvent("lns:Source/Lifecycle",
