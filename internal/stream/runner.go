@@ -37,6 +37,7 @@ type Runner struct {
 	stopCh  chan struct{}
 	stopped bool
 	tailErr string
+	cmd     *exec.Cmd // 当前 ffmpeg 进程；Stop 时强制 Kill 防设备泄漏
 }
 
 // Manager 管理全部取流进程。
@@ -155,13 +156,21 @@ func newRunner(cam config.Camera, pushAddr, bin string, logger *slog.Logger) *Ru
 // Spec 返回创建时的参数指纹。
 func (r *Runner) Spec() string { return r.spec }
 
-// Stop 请求停止（幂等）。
+// Stop 请求停止（幂等）：置位停止标志并**强制结束当前 ffmpeg 进程**。
+// ffmpeg 推流期间不会自然退出，Run 阻塞在 cmd.Run() 上——不主动 Kill 的话
+// 旧进程会一直占着采集设备（dshow/v4l2 独占），spec 变化/禁用/删除后的
+// 新进程将永远打不开设备（实测踩坑：改音频配置后旧进程泄漏，新进程循环
+// "device already in use"）。
 func (r *Runner) Stop() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	cmd := r.cmd
 	if !r.stopped {
 		r.stopped = true
 		close(r.stopCh)
+	}
+	r.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 
@@ -206,6 +215,9 @@ func (r *Runner) Run() {
 		}
 
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
+		r.mu.Lock()
+		r.cmd = cmd
+		r.mu.Unlock()
 		r.setRunning(true, "", &starts)
 		started := time.Now()
 		err := cmd.Run()
