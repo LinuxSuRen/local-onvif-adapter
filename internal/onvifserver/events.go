@@ -269,6 +269,7 @@ func topicSet() string {
 		`<wstop:Security><wstop:AuthFailure wstop:topic="true"/></wstop:Security>` +
 		`<wstop:Source><wstop:Lifecycle wstop:topic="true"/></wstop:Source>` +
 		`<wstop:Config><wstop:Changed wstop:topic="true"/></wstop:Config>` +
+		`<wstop:System><wstop:CPU wstop:topic="true"/><wstop:Memory wstop:topic="true"/><wstop:Disk wstop:topic="true"/><wstop:Temperature wstop:topic="true"/></wstop:System>` +
 		`</wstop:TopicSet>`
 }
 
