@@ -174,6 +174,9 @@ func main() {
 			[]onvifserver.EventItem{{"Source", "Config"}},
 			[]onvifserver.EventItem{{"State", "Saved"}})
 	}
+	// 宿主机资源监控（带算力相机视角：CPU/内存/磁盘/温度 = 相机内部资源）
+	// 只在跨越阈值时发布事件（滞回防抖），30s 采集周期
+	onvifserver.StartSystemMonitor(*dataDir, logger)
 
 	mux := http.NewServeMux()
 	// 快照路由优先于 /onvif/ 前缀的 SOAP 服务。
