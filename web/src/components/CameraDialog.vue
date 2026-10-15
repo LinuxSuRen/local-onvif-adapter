@@ -26,6 +26,8 @@ const DEFAULT_FORM = {
   framerate: 15,
   bitrate_kbps: 2048,
   infrared: false,
+  audio_enabled: false,
+  audio_source: '',
   enabled: true
 }
 
@@ -43,6 +45,7 @@ const mode = ref('local')
 
 // 本地设备枚举。
 const devices = ref([])
+const audioDevices = ref([])
 const devicesLoading = ref(false)
 const devicesEnumFailed = ref(false)
 const defaultLocalType = ref('')
@@ -53,10 +56,12 @@ async function loadDevices(showToast = false) {
   try {
     const result = await listDevices()
     devices.value = Array.isArray(result && result.devices) ? result.devices : []
+    audioDevices.value = Array.isArray(result && result.audio_devices) ? result.audio_devices : []
     defaultLocalType.value = (result && result.default_type) || ''
     devicesEnumFailed.value = false
   } catch (e) {
     devices.value = []
+    audioDevices.value = []
     devicesEnumFailed.value = true
     if (showToast) ElMessage.warning(e.message)
   } finally {
@@ -91,6 +96,11 @@ function deviceLabel(d) {
 function deviceValue(d) {
   return d.alt_source || d.source
 }
+
+// 音频可用的来源：本地摄像头（麦克风）与 RTSP 源（透传源音轨）。
+const audioAvailable = computed(() => mode.value === 'local' || mode.value === 'rtsp')
+// 本地摄像头需要指定音频设备；RTSP 源直接用源流音轨，无需选择。
+const audioNeedsSource = computed(() => mode.value === 'local')
 
 // 当前模式下可选的设备列表：本地摄像头排除屏幕，屏幕模式只显示屏幕。
 const filteredDevices = computed(() => {
@@ -163,6 +173,8 @@ watch(
         framerate: c.framerate != null ? c.framerate : 15,
         bitrate_kbps: c.bitrate_kbps != null ? c.bitrate_kbps : 2048,
         infrared: !!c.infrared,
+        audio_enabled: !!c.audio_enabled,
+        audio_source: c.audio_source != null ? c.audio_source : '',
         enabled: !!c.enabled
       })
       mode.value = LOCAL_TYPES.includes(c.type) ? 'local' : c.type || 'local'
@@ -199,6 +211,8 @@ async function handleSave() {
     framerate: form.framerate,
     bitrate_kbps: form.bitrate_kbps,
     infrared: form.infrared,
+    audio_enabled: audioAvailable.value && form.audio_enabled,
+    audio_source: audioAvailable.value && form.audio_enabled ? form.audio_source.trim() : '',
     enabled: form.enabled
   }
   try {
@@ -285,6 +299,31 @@ async function handleSave() {
         <el-switch v-model="form.infrared" />
         <div class="form-tip">标记为红外通道后，ONVIF profile 名称会带 infrared，客户端可自动识别</div>
       </el-form-item>
+      <el-form-item v-if="audioAvailable" label="音频">
+        <div class="num-row">
+          <el-switch v-model="form.audio_enabled" />
+          <el-select
+            v-if="form.audio_enabled && audioNeedsSource"
+            v-model="form.audio_source"
+            class="full-width audio-source"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            :loading="devicesLoading"
+            placeholder="选择麦克风，或输入音频源标识"
+          >
+            <el-option v-for="d in audioDevices" :key="d.source" :label="d.name" :value="d.source" />
+          </el-select>
+        </div>
+        <div class="form-tip">
+          {{
+            audioNeedsSource
+              ? '启用后在推流中附带麦克风音轨（AAC）；Linux 需填 pulse 源名（留空默认 default）'
+              : '启用后透传 RTSP 源自带的音轨（统一转码 AAC），无需选择设备'
+          }}
+        </div>
+      </el-form-item>
       <el-form-item label="启用">
         <el-switch v-model="form.enabled" />
       </el-form-item>
@@ -320,6 +359,9 @@ async function handleSave() {
   margin-top: 4px;
 }
 .enum-refresh {
+  margin-left: 8px;
+}
+.audio-source {
   margin-left: 8px;
 }
 </style>

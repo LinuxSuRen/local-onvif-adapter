@@ -44,10 +44,22 @@ type Camera struct {
 	Framerate   int        `json:"framerate"` // 0 表示默认 15
 	BitrateKBPS int        `json:"bitrate_kbps"`
 	Infrared    bool       `json:"infrared"` // 标记为红外通道，profile 名称会带 infrared
+	// 音频采集：启用后在推流中附带 AAC 音轨（麦克风/源音轨）。
+	// AudioSource 含义按平台：dshow 为麦克风设备名（可含 audio= 前缀）；
+	// avfoundation 为音频设备索引；Linux v4l2 为 pulse 源名（默认 "default"）；
+	// rtsp 源忽略（直接取源流音轨）。
+	AudioEnabled bool   `json:"audio_enabled"`
+	AudioSource  string `json:"audio_source"`
 	// 所有摄像头默认提供 mock 级 PTZ（虚拟云台状态机），客户端调用不会报 Fault，
 	// 因此不再需要显式的云台支持开关。
 	Enabled bool `json:"enabled"`
 }
+
+// AudioSampleRate 返回音频输出采样率（统一重采样，保证与 ONVIF 声明一致）。
+func (c Camera) AudioSampleRate() int { return 44100 }
+
+// AudioBitrate 返回音频码率（bps）。
+func (c Camera) AudioBitrate() int { return 65536 }
 
 // FramerateOrDefault 返回生效帧率。
 func (c Camera) FramerateOrDefault() int {

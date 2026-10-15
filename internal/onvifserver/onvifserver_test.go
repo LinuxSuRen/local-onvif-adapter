@@ -32,9 +32,53 @@ func newTestService(t *testing.T, cams ...config.Camera) *Service {
 func twoCameras() []config.Camera {
 	return []config.Camera{
 		{ID: "cam1", Name: "前门", Type: config.TypeV4L2, Source: "/dev/video0",
-			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048, Enabled: true},
+			Width: 1280, Height: 720, Framerate: 15, BitrateKBPS: 2048,
+			AudioEnabled: true, AudioSource: "default", Enabled: true},
 		{ID: "cam2", Name: "热成像", Type: config.TypeTestSrc, Source: "",
 			Width: 640, Height: 512, Framerate: 9, BitrateKBPS: 1024, Infrared: true, Enabled: true},
+	}
+}
+
+// TestAudioProfileAndOps 启用音频的摄像头：profile 声明 AAC 音频配置，
+// 音频源/编码查询可按 token 命中；未启用音频的摄像头不出现音频元素。
+func TestAudioProfileAndOps(t *testing.T) {
+	s := newTestService(t, twoCameras()...)
+
+	body := callOp(t, s, "trt", "GetProfiles", "")
+	if !strings.Contains(body, `<tt:Encoding>AAC</tt:Encoding>`) ||
+		!strings.Contains(body, `token="aec_cam1"`) || !strings.Contains(body, `token="as_cam1"`) {
+		t.Fatalf("cam1 (audio enabled) should declare audio configs: %s", body)
+	}
+	// 采样率/码率与 ffmpeg 输出一致。
+	if !strings.Contains(body, "<tt:SampleRate>44100</tt:SampleRate>") ||
+		!strings.Contains(body, "<tt:Bitrate>65536</tt:Bitrate>") {
+		t.Fatalf("audio params mismatch: %s", body)
+	}
+	// cam2 未启用音频：其 profile 段不含音频元素。
+	if idx := strings.Index(body, "profile_cam2"); idx >= 0 && strings.Contains(body[idx:], "AudioEncoderConfiguration") {
+		t.Fatalf("cam2 (no audio) should not declare audio: %s", body[idx:])
+	}
+
+	body = callOp(t, s, "trt", "GetAudioSources", "")
+	if strings.Count(body, "<trt:Sources token=") != 1 || !strings.Contains(body, `token="as_cam1"`) {
+		t.Fatalf("GetAudioSources: %s", body)
+	}
+	body = callOp(t, s, "trt", "GetAudioEncoderConfigurations", "")
+	if strings.Count(body, `token="aec_cam1"`) != 1 || !strings.Contains(body, "AAC") {
+		t.Fatalf("GetAudioEncoderConfigurations: %s", body)
+	}
+	body = callOp(t, s, "trt", "GetAudioEncoderConfiguration", `<trt:ConfigurationToken>aec_cam1</trt:ConfigurationToken>`)
+	if !strings.Contains(body, "GetAudioEncoderConfigurationResponse") || !strings.Contains(body, "44100") {
+		t.Fatalf("GetAudioEncoderConfiguration: %s", body)
+	}
+	body = callOp(t, s, "trt", "GetAudioSourceConfiguration", `<trt:ConfigurationToken>as_cam1</trt:ConfigurationToken>`)
+	if !strings.Contains(body, "GetAudioSourceConfigurationResponse") {
+		t.Fatalf("GetAudioSourceConfiguration: %s", body)
+	}
+	// 未启用音频的 token 查询返回 Fault 而非误答。
+	body = callOp(t, s, "trt", "GetAudioEncoderConfiguration", `<trt:ConfigurationToken>aec_cam2</trt:ConfigurationToken>`)
+	if !strings.Contains(body, "Fault") {
+		t.Fatalf("unknown audio token should fault: %s", body)
 	}
 }
 

@@ -37,16 +37,17 @@ type Runner struct {
 	stopCh  chan struct{}
 	stopped bool
 	tailErr string
+	cmd     *exec.Cmd // 当前 ffmpeg 进程；Stop 时强制 Kill 防设备泄漏
 }
 
 // Manager 管理全部取流进程。
 type Manager struct {
-	mu        sync.Mutex
-	runners   map[string]*Runner
-	pushBase  func() string // 每次取流实时求值（认证开关变化时注入/移除 userinfo）
-	lastAddr  string        // 上次使用的推流地址；变化即全部重启
-	bin       string
-	logger    *slog.Logger
+	mu       sync.Mutex
+	runners  map[string]*Runner
+	pushBase func() string // 每次取流实时求值（认证开关变化时注入/移除 userinfo）
+	lastAddr string        // 上次使用的推流地址；变化即全部重启
+	bin      string
+	logger   *slog.Logger
 }
 
 // NewManager 创建取流管理器。pushBase 返回推流目标（形如 rtsp://127.0.0.1:8554，
@@ -64,8 +65,12 @@ func NewManager(pushBase func() string, bin string, logger *slog.Logger) *Manage
 }
 
 // Spec 描述摄像头取流的关键参数，任一变化即需要重启进程。
+// 音频开关/音频源也必须纳入指纹：否则改音频配置后旧进程继续跑（实测踩坑：
+// 开启音频后旧的纯视频 ffmpeg 不重启，流里永远没有音轨）。
 func Spec(c config.Camera) string {
-	return fmt.Sprintf("%s|%s|%d|%d|%d|%d", c.Type, c.Source, c.Width, c.Height, c.FramerateOrDefault(), c.BitrateOrDefault())
+	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%t|%s",
+		c.Type, c.Source, c.Width, c.Height, c.FramerateOrDefault(), c.BitrateOrDefault(),
+		c.AudioEnabled, c.AudioSource)
 }
 
 // Sync 将运行态对齐到期望的摄像头列表：
@@ -151,13 +156,21 @@ func newRunner(cam config.Camera, pushAddr, bin string, logger *slog.Logger) *Ru
 // Spec 返回创建时的参数指纹。
 func (r *Runner) Spec() string { return r.spec }
 
-// Stop 请求停止（幂等）。
+// Stop 请求停止（幂等）：置位停止标志并**强制结束当前 ffmpeg 进程**。
+// ffmpeg 推流期间不会自然退出，Run 阻塞在 cmd.Run() 上——不主动 Kill 的话
+// 旧进程会一直占着采集设备（dshow/v4l2 独占），spec 变化/禁用/删除后的
+// 新进程将永远打不开设备（实测踩坑：改音频配置后旧进程泄漏，新进程循环
+// "device already in use"）。
 func (r *Runner) Stop() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	cmd := r.cmd
 	if !r.stopped {
 		r.stopped = true
 		close(r.stopCh)
+	}
+	r.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 
@@ -202,6 +215,9 @@ func (r *Runner) Run() {
 		}
 
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
+		r.mu.Lock()
+		r.cmd = cmd
+		r.mu.Unlock()
 		r.setRunning(true, "", &starts)
 		started := time.Now()
 		err := cmd.Run()
@@ -272,6 +288,8 @@ func (t *tailBuffer) Tail() string {
 func (r *Runner) camPath() string { return "/cam/" + r.cam.ID }
 
 // InputArgs 按摄像头类型构造 ffmpeg 输入参数。
+// 启用音频时按平台把麦克风并入输入（dshow 联合输入 / avfoundation 双索引 /
+// v4l2+pulse 双输入；rtsp 源直接读源流音轨，无需改动输入）。
 func InputArgs(c config.Camera) []string {
 	fps := c.FramerateOrDefault()
 	var args []string
@@ -285,6 +303,14 @@ func InputArgs(c config.Camera) []string {
 			args = append(args, "-video_size", fmt.Sprintf("%dx%d", c.Width, c.Height))
 		}
 		args = append(args, "-i", c.Source)
+		if c.AudioEnabled {
+			// Linux 视频与音频是两个输入：v4l2 设备 + pulse 源（默认 default）。
+			src := strings.TrimSpace(c.AudioSource)
+			if src == "" {
+				src = "default"
+			}
+			args = append(args, "-f", "pulse", "-i", src)
+		}
 	case config.TypeAVFoundation:
 		args = append(args, "-f", "avfoundation")
 		if fps > 0 {
@@ -293,6 +319,10 @@ func InputArgs(c config.Camera) []string {
 		src := c.Source
 		if src == "" {
 			src = "0"
+		}
+		if c.AudioEnabled && strings.TrimSpace(c.AudioSource) != "" {
+			// avfoundation 原生联合输入："视频索引:音频索引"。
+			src = src + ":" + strings.TrimSpace(c.AudioSource)
 		}
 		args = append(args, "-i", src)
 	case config.TypeDShow:
@@ -307,6 +337,14 @@ func InputArgs(c config.Camera) []string {
 		// 允许直接填设备名；已带 video= 前缀或别名（@device_...）时原样使用。
 		if src != "" && !strings.Contains(src, "=") {
 			src = "video=" + src
+		}
+		if c.AudioEnabled && strings.TrimSpace(c.AudioSource) != "" {
+			// dshow 联合输入：video=..:audio=..（音频名含冒号/等号时允许 audio= 前缀原样）。
+			audio := strings.TrimSpace(c.AudioSource)
+			if !strings.HasPrefix(audio, "audio=") {
+				audio = "audio=" + audio
+			}
+			src = src + ":" + audio
 		}
 		args = append(args, "-i", src)
 	case config.TypeScreen:
@@ -451,10 +489,38 @@ func BuildArgs(c config.Camera, pushURL string) []string {
 		"-pix_fmt", "yuv420p",
 		"-g", fmt.Sprintf("%d", gov),
 		"-b:v", fmt.Sprintf("%dk", c.BitrateOrDefault()),
-		"-an",
+	)
+	args = append(args, audioEncodeArgs(c)...)
+	args = append(args,
 		"-f", "rtsp",
 		"-rtsp_transport", "tcp",
 		pushURL,
 	)
 	return args
+}
+
+// audioEncodeArgs 构造音频编码与流映射参数：
+//   - 未启用音频（或该来源不支持）：-an 丢弃音轨，行为与历史版本一致；
+//   - 启用音频：显式 -map 绑定视频与音频输入（双输入场景 v4l2+pulse 的音频在
+//     输入 1；其余场景同输入 0），音轨可选（"?"）——麦克风缺失/源无音轨时
+//     优雅退化为纯视频而不是整路失败；统一转码 AAC 并重采样到与 ONVIF
+//     声明一致的 44.1kHz。
+func audioEncodeArgs(c config.Camera) []string {
+	audioInputIdx := "0"
+	if c.Type == config.TypeV4L2 {
+		audioInputIdx = "1"
+	}
+	// 历史行为兜底：dshow/avfoundation 配置了音频开关但没选设备时按未启用处理。
+	enabled := c.AudioEnabled
+	if enabled && (c.Type == config.TypeDShow || c.Type == config.TypeAVFoundation) && strings.TrimSpace(c.AudioSource) == "" {
+		enabled = false
+	}
+	if !enabled {
+		return []string{"-an"}
+	}
+	return []string{
+		"-map", "0:v:0",
+		"-map", audioInputIdx + ":a:0?",
+		"-c:a", "aac", "-b:a", fmt.Sprintf("%d", c.AudioBitrate()), "-ar", fmt.Sprintf("%d", c.AudioSampleRate()),
+	}
 }

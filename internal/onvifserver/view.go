@@ -43,6 +43,8 @@ type CameraView struct {
 	VideoSourceCfgTok string
 	PTZNodeToken      string
 	PTZConfigToken    string
+	AudioSourceToken  string // 音频源 token（as_camN），仅启用音频的摄像头暴露
+	AudioEncoderToken string // 音频编码 token（aec_camN）
 	PTZ               *ptzmock.Node
 }
 
@@ -66,6 +68,8 @@ func NewCameraView(cam config.Camera, ptzReg *ptzmock.Registry) CameraView {
 		VideoSourceCfgTok: "vsc_" + id,
 		PTZNodeToken:      "ptznode_" + id,
 		PTZConfigToken:    "ptzcfg_" + id,
+		AudioSourceToken:  "as_" + id,
+		AudioEncoderToken: "aec_" + id,
 		PTZ:               ptzReg.Get(id),
 	}
 }

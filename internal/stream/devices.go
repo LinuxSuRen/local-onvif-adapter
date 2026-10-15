@@ -400,3 +400,89 @@ func guessKind(name string) string {
 		return kindUnknown
 	}
 }
+
+// ---- 音频输入设备枚举 ----
+
+// AudioDevice 本地音频输入设备（麦克风）。
+type AudioDevice struct {
+	Name   string `json:"name"`   // 展示名
+	Source string `json:"source"` // ffmpeg 输入标识：dshow 设备名 / avfoundation 索引
+}
+
+// ListLocalAudioDevices 枚举当前平台的音频输入设备。
+// Linux 返回空列表（v4l2 场景音频走 pulse 源名，手动填写，默认 "default"）。
+func ListLocalAudioDevices(ffmpegBin string) []AudioDevice {
+	switch runtime.GOOS {
+	case "windows":
+		stderr, err := runListCommand(ffmpegBin, "-list_devices", "true", "-f", "dshow", "-i", "dummy")
+		if err != nil {
+			return nil
+		}
+		return parseDShowAudioDevices(stderr)
+	case "darwin":
+		stderr, err := runListCommand(ffmpegBin, "-f", "avfoundation", "-list_devices", "true", "-i", "")
+		if err != nil {
+			return nil
+		}
+		return parseAVFAudioDevices(stderr)
+	default:
+		return nil
+	}
+}
+
+// parseDShowAudioDevices 解析 dshow 设备列表中的音频设备（兼容新旧两种输出格式）。
+func parseDShowAudioDevices(stderr string) []AudioDevice {
+	var devices []AudioDevice
+	section := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "Alternative name") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, "DirectShow video devices"):
+			section = "video"
+			continue
+		case strings.Contains(line, "DirectShow audio devices"):
+			section = "audio"
+			continue
+		}
+		m := quotedNameRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		keep := false
+		if media := dshowMediaTypeRe.FindString(trimmed); media != "" {
+			keep = strings.Contains(media, "audio") && !strings.Contains(media, "video")
+		} else {
+			keep = section == "audio"
+		}
+		if keep {
+			devices = append(devices, AudioDevice{Name: m[1], Source: m[1]})
+		}
+	}
+	return devices
+}
+
+// parseAVFAudioDevices 解析 avfoundation 音频设备段（[N] 设备名）。
+func parseAVFAudioDevices(stderr string) []AudioDevice {
+	var devices []AudioDevice
+	section := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		switch {
+		case strings.Contains(line, "AVFoundation video devices"):
+			section = "video"
+			continue
+		case strings.Contains(line, "AVFoundation audio devices"):
+			section = "audio"
+			continue
+		}
+		if section != "audio" {
+			continue
+		}
+		if m := avfDeviceRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			devices = append(devices, AudioDevice{Name: m[2], Source: m[1]})
+		}
+	}
+	return devices
+}
