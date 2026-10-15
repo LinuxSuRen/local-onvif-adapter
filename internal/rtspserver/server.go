@@ -4,6 +4,7 @@
 package rtspserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -13,11 +14,15 @@ import (
 	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"github.com/bluenviron/gortsplib/v4/pkg/description"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
+	"github.com/bluenviron/gortsplib/v4/pkg/liberrors"
 	"github.com/pion/rtp"
 )
 
 // DefaultPublisherWait 读者等待发布者就绪的默认时长。
 const DefaultPublisherWait = 5 * time.Second
+
+// DefaultSlowLogInterval 慢读者日志节流的默认间隔。
+const DefaultSlowLogInterval = 5 * time.Second
 
 // pathEntry 一个路径（/cam/<id>）对应的流与发布者。
 type pathEntry struct {
@@ -34,14 +39,20 @@ type Server struct {
 	// PublisherWait 控制读者在发布者未就绪时的等待时长。
 	PublisherWait time.Duration
 
+	// SlowLogInterval 同一会话慢读者（写队列满、背压丢帧）日志的最小间隔，
+	// 避免慢客户端把日志刷屏。测试可调短。
+	SlowLogInterval time.Duration
+
 	// Creds 按请求实时返回生效凭证（返回 ok=false 表示认证关闭）；
 	// 设置后 DESCRIBE/SETUP/PLAY 与 ANNOUNCE 均要求 Basic/Digest 认证，
 	// ffmpeg 推流端需在推流地址注入 userinfo（见 main.go）。
 	Creds func() (user, pass string, ok bool)
 
-	mu     sync.Mutex
-	paths  map[string]*pathEntry
-	closed bool
+	mu       sync.Mutex
+	paths    map[string]*pathEntry
+	closed   bool
+	slowMu   sync.Mutex
+	slowLast map[*gortsplib.ServerSession]time.Time
 }
 
 // New 创建内嵌 RTSP 服务器。
@@ -51,9 +62,11 @@ func New(rtspAddr, udpRTPAddr, udpRTCPAddr string, logger *slog.Logger) *Server 
 		logger = slog.Default()
 	}
 	s := &Server{
-		logger:        logger,
-		PublisherWait: DefaultPublisherWait,
-		paths:         map[string]*pathEntry{},
+		logger:          logger,
+		PublisherWait:   DefaultPublisherWait,
+		SlowLogInterval: DefaultSlowLogInterval,
+		paths:           map[string]*pathEntry{},
+		slowLast:        map[*gortsplib.ServerSession]time.Time{},
 	}
 	s.authz = newAuthorizer(func() (string, string, bool) {
 		if s.Creds == nil {
@@ -112,6 +125,34 @@ func (s *Server) lookup(path string, timeout time.Duration) *pathEntry {
 
 // ---- ServerHandler 实现 ----
 
+// OnStreamWriteError 读者写失败回调。gortsplib 在 handler 未实现本接口时会用
+// log.Println 兜底（经 slog.SetDefault 桥接后表现为无上下文的 INFO 刷屏）。
+// 写队列满是慢读者的正常背压丢帧：降为 Debug 并按会话节流；
+// 其他写错误（如连接损坏）保持 Warn 且不节流——它们通常紧接着会话关闭。
+func (s *Server) OnStreamWriteError(ctx *gortsplib.ServerHandlerOnStreamWriteErrorCtx) {
+	if errors.Is(ctx.Error, liberrors.ErrServerWriteQueueFull{}) {
+		if s.allowSlowLog(ctx.Session) {
+			s.logger.Debug("rtsp reader slow, packets dropped",
+				"path", ctx.Session.SetuppedPath())
+		}
+		return
+	}
+	s.logger.Warn("rtsp reader write failed",
+		"path", ctx.Session.SetuppedPath(), "err", ctx.Error.Error())
+}
+
+// allowSlowLog 同一会话在 SlowLogInterval 内最多放行一条慢读者日志。
+func (s *Server) allowSlowLog(sess *gortsplib.ServerSession) bool {
+	s.slowMu.Lock()
+	defer s.slowMu.Unlock()
+	now := time.Now()
+	if last, ok := s.slowLast[sess]; ok && now.Sub(last) < s.SlowLogInterval {
+		return false
+	}
+	s.slowLast[sess] = now
+	return true
+}
+
 // OnConnOpen 连接建立。
 func (s *Server) OnConnOpen(_ *gortsplib.ServerHandlerOnConnOpenCtx) {}
 
@@ -126,6 +167,9 @@ func (s *Server) OnSessionOpen(_ *gortsplib.ServerHandlerOnSessionOpenCtx) {}
 // OnSessionClose 会话关闭；发布者离开时释放对应路径（读者随之断开，
 // 客户端会自动重连，配合 ffmpeg 退避重推实现秒级恢复，与 mediamtx 语义一致）。
 func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
+	s.slowMu.Lock()
+	delete(s.slowLast, ctx.Session)
+	s.slowMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for path, e := range s.paths {
