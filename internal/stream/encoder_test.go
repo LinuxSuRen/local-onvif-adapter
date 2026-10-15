@@ -98,6 +98,27 @@ func TestFPSGuarantee(t *testing.T) {
 	}
 }
 
+// TestResolutionGuarantee 设备源配置了分辨率时输出侧 scale 兜底
+//（-video_size 会被不支持的驱动静默忽略）；未配置或非设备源不追加。
+func TestResolutionGuarantee(t *testing.T) {
+	setEncoderForTest(t, EncoderX264)
+	cam := config.Camera{Type: config.TypeV4L2, Source: "/dev/video0", Width: 320, Height: 240}
+	got := strings.Join(BuildArgs(cam, "u"), " ")
+	if !strings.Contains(got, "-vf scale=320:240") {
+		t.Fatalf("resolution guarantee missing: %q", got)
+	}
+	// 未配置分辨率：不追加 scale。
+	cam.Width, cam.Height = 0, 0
+	if got := strings.Join(BuildArgs(cam, "u"), " "); strings.Contains(got, "scale=") {
+		t.Fatalf("no scale without configured resolution: %q", got)
+	}
+	// rtsp 源：转码自然缩放，无需强制。
+	rcam := config.Camera{Type: config.TypeRTSP, Source: "rtsp://x", Width: 320, Height: 240}
+	if got := strings.Join(BuildArgs(rcam, "u"), " "); strings.Contains(got, "scale=") {
+		t.Fatalf("rtsp should not force scale: %q", got)
+	}
+}
+
 // TestBuildArgsHardwareEncoder 硬件编码下的完整命令行：编码器切换、
 // 音频参数不受影响、帧率兜底仍在。
 func TestBuildArgsHardwareEncoder(t *testing.T) {

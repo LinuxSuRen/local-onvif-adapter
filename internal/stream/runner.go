@@ -491,6 +491,7 @@ func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []stri
 	args = append(args, videoEncodeArgs(resolveEncoder(bin, logger), gov, c.BitrateOrDefault())...)
 	args = append(args, audioEncodeArgs(c)...)
 	args = append(args, fpsGuaranteeArgs(c)...)
+	args = append(args, resolutionGuaranteeArgs(c)...)
 	args = append(args,
 		"-f", "rtsp",
 		"-rtsp_transport", "tcp",

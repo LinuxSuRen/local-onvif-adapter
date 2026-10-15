@@ -98,11 +98,26 @@ func videoEncodeArgs(encoder string, gov int, bitrateKbps int) []string {
 // fpsGuaranteeArgs 输出侧帧率兜底：设备采集源（v4l2/dshow/avfoundation）的
 // -framerate 请求可能被驱动静默拒绝（实测配置 10fps 回退到 30fps，白烧三倍
 // 编码量）。输出侧 -r 强制对齐生效帧率：高于配置抽帧、低于配置补帧，
-// 「配置即生效」。合成源（testsrc 自带 rate）与 rtsp 源（按源节奏转码）不强制。
+// 「配置即生效」。rtsp 源按源节奏转码、testsrc 自带节奏，均不强制。
 func fpsGuaranteeArgs(c config.Camera) []string {
 	switch c.Type {
 	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation:
 		return []string{"-r", fmt.Sprintf("%d", c.FramerateOrDefault())}
+	}
+	return nil
+}
+
+// resolutionGuaranteeArgs 输出侧分辨率兜底：设备采集源配置了分辨率时，
+// -video_size 请求同样可能被驱动静默拒绝（实测摄像头不支持 320x240 时
+// 命令行带该参数但仍按 640x480 采集编码，arm 板 CPU 直接翻 4 倍）。
+// 输出侧 scale 滤镜保证编码分辨率与配置一致。
+func resolutionGuaranteeArgs(c config.Camera) []string {
+	if c.Width <= 0 || c.Height <= 0 {
+		return nil
+	}
+	switch c.Type {
+	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation:
+		return []string{"-vf", fmt.Sprintf("scale=%d:%d", c.Width, c.Height)}
 	}
 	return nil
 }
