@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,10 +50,36 @@ func New(bin string, logger *slog.Logger) *Generator {
 
 // JPEG 直接从摄像头设备抓取一帧 JPEG。命中缓存且未过期时直接返回。
 func (g *Generator) JPEG(cam config.Camera) ([]byte, error) {
+	if cam.Type == config.TypeRpicam {
+		// CSI 摄像头直抓走 rpicam-still（libcamera 原生输出 JPEG，不经 ffmpeg）。
+		return g.rpiStill(cam)
+	}
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	args = append(args, stream.InputArgs(cam)...)
 	args = append(args, "-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1")
 	return g.captured(cam.ID, args)
+}
+
+// rpiStill 用 rpicam-still 抓取一帧 JPEG（禁用预览与签名信息）。
+func (g *Generator) rpiStill(cam config.Camera) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	args := []string{"-n", "-t", "1000", "-o", "-"}
+	if cam.Width > 0 && cam.Height > 0 {
+		args = append(args, "--width", strconv.Itoa(cam.Width), "--height", strconv.Itoa(cam.Height))
+	}
+	if src := strings.TrimSpace(cam.Source); src != "" {
+		args = append(args, "--camera", src)
+	}
+	g.logger.Debug("rpicam-still capturing", "camera", cam.ID, "args", args)
+	data, err := exec.CommandContext(ctx, "rpicam-still", args...).Output() //nolint:gosec // 固定工具名
+	if err != nil {
+		return nil, fmt.Errorf("rpicam-still capture failed: %w", err)
+	}
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return nil, fmt.Errorf("rpicam-still produced non-JPEG output (%d bytes)", len(data))
+	}
+	return data, nil
 }
 
 // JPEGFromStream 从 RTSP 取流地址拉取一帧 JPEG（与 JPEG 共享同一缓存键）。

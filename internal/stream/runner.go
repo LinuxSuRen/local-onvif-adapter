@@ -216,6 +216,33 @@ func (r *Runner) Run() {
 			}
 		}
 
+		// 树莓派 CSI 摄像头：rpicam-vid（libcamera + 硬件 H264）写 stdout，
+		// 接到 ffmpeg 的 stdin；ffmpeg 仅 -c copy 直通封装（零转码）。
+		if r.cam.Type == config.TypeRpicam {
+			pr, pw, pipeErr := os.Pipe()
+			if pipeErr == nil {
+				rpicam := exec.Command("rpicam-vid", rpicamVidArgs(r.cam)...) //nolint:gosec // 固定工具名
+				rpicam.Stdout = pw
+				var rpErr tailBuffer
+				rpicam.Stderr = &rpErr
+				if startErr := rpicam.Start(); startErr == nil {
+					cmd.Stdin = pr
+					defer func() {
+						_ = pw.Close()
+						_ = pr.Close()
+						if rpicam.Process != nil {
+							_ = rpicam.Process.Kill()
+						}
+					}()
+				} else {
+					_ = pr.Close()
+					_ = pw.Close()
+					r.logger.Warn("rpicam-vid start failed（仅树莓派可用）",
+						"camera", r.cam.ID, "err", startErr.Error())
+				}
+			}
+		}
+
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
 		// 先 Start 再发布 r.cmd：cmd.Process 字段由 Start 写入，若在 Run() 之前
 		// 发布，Stop() 在锁外读 cmd.Process 会与 Start 的写构成数据竞争
@@ -407,6 +434,9 @@ func InputArgs(c config.Camera) []string {
 		args = append(args, screenInputArgs(c)...)
 	case config.TypeRTSP:
 		args = append(args, "-rtsp_transport", "tcp", "-i", c.Source)
+	case config.TypeRpicam:
+		// rpicam-vid（libcamera）经 stdin 管道喂 H264 裸流，见 rpicamVidArgs。
+		args = append(args, "-f", "h264", "-i", "pipe:")
 	case config.TypeTestSrc:
 		w, h := 1280, 720
 		if c.Width > 0 && c.Height > 0 {
@@ -534,11 +564,22 @@ func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []stri
 		gov = 10
 	}
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	// macOS 屏幕源需要从 stdin 管道读 screencapture 帧，不能加 -nostdin。
-	if !(c.Type == config.TypeScreen && runtime.GOOS == "darwin") {
+	// macOS 屏幕源与 rpicam 源需要从 stdin 管道读帧，不能加 -nostdin。
+	if !(c.Type == config.TypeScreen && runtime.GOOS == "darwin") && c.Type != config.TypeRpicam {
 		args = append(args, "-nostdin")
 	}
 	args = append(args, InputArgs(c)...)
+	if c.Type == config.TypeRpicam {
+		// rpicam-vid 已在采集侧完成硬件 H264 编码（分辨率/帧率/码率由
+		// libcamera 强制执行，不存在驱动静默回退），ffmpeg 仅直通封装：
+		// 零转码，CPU 几乎无开销；帧率/分辨率兜底不适用（copy 不能过滤）。
+		args = append(args, "-c", "copy", "-an",
+			"-f", "rtsp",
+			"-rtsp_transport", "tcp",
+			pushURL,
+		)
+		return args
+	}
 	// 屏幕采集未配置分辨率时统一缩放到 1280 宽：
 	//   - macOS：PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限；
 	//   - Windows/Linux：多屏全分辨率（如 2752×1152）多路并发时浏览器
@@ -557,6 +598,41 @@ func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []stri
 		pushURL,
 	)
 	return args
+}
+
+// rpicamVidArgs 构造 rpicam-vid 命令参数（libcamera 管线采集 CSI 摄像头，
+// 硬件 H264 编码后写 stdout，由 runner 接到 ffmpeg 的 stdin）。
+//   - --inline：SPS/PPS 随每个关键帧内联重发——RTSP 读者中途加入也能解码
+//    （这正是 ffmpeg 直调 v4l2m2m 翻车缺的特性，见 encoder.go 实测说明）；
+//   - 分辨率/帧率/码率由 libcamera 强制执行，不存在 v4l2 的静默回退；
+//   - --intra：关键帧周期与软编码 gov 约定一致（2×帧率），控制读者接入延迟。
+func rpicamVidArgs(c config.Camera) []string {
+	fps := c.FramerateOrDefault()
+	if fps <= 0 {
+		fps = 15
+	}
+	w, h := 640, 480
+	if c.Width > 0 && c.Height > 0 {
+		w, h = c.Width, c.Height
+	}
+	intra := fps * 2
+	if intra < 10 {
+		intra = 10
+	}
+	args := []string{
+		"-t", "0",
+		"--codec", "h264",
+		"--inline",
+		"--width", fmt.Sprintf("%d", w),
+		"--height", fmt.Sprintf("%d", h),
+		"--framerate", fmt.Sprintf("%d", fps),
+		"--bitrate", fmt.Sprintf("%d", c.BitrateOrDefault()*1000),
+		"--intra", fmt.Sprintf("%d", intra),
+	}
+	if src := strings.TrimSpace(c.Source); src != "" {
+		args = append(args, "--camera", src) // 多摄像头时按 libcamera 索引选择
+	}
+	return append(args, "-o", "-")
 }
 
 // audioEncodeArgs 构造音频编码与流映射参数：

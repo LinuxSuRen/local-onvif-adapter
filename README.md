@@ -103,7 +103,15 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 | `avfoundation` | macOS | `ffmpeg -list_devices`（过滤屏幕采集） | 设备索引 `0` |
 | `dshow` | Windows | `ffmpeg -list_devices` | 设备名 |
 | `rtsp` | 任意 | 手动填写 | `rtsp://user:pass@ip:554/stream` |
+| `rpicam` | 树莓派 | 无需选择（libcamera 默认摄像头） | 留空；多摄像头填 libcamera 索引 |
 | `testsrc` | 任意 | 无需设备 | 留空 |
+
+`rpicam` 类型走 **libcamera 管线**（`rpicam-vid`）：新版树莓派系统的 CSI 摄像头
+无法通过 `/dev/video0` 直接 v4l2 采集（unicam 媒体管线需 libcamera 配置）。
+该类型由 rpicam-vid 完成**硬件 H264 编码**（`--inline` 保证 SPS/PPS 随关键帧
+重发，RTSP 读者中途加入可解码），ffmpeg 仅 `-c copy` 直通封装——**零转码**，
+分辨率/帧率/码率由 libcamera 强制执行（无驱动静默回退问题）。快照走
+`rpicam-still` 原生输出。
 
 每个摄像头可配置分辨率（0 表示自动）、帧率、码率、是否红外、是否启用。
 枚举列表也支持手动输入设备源（高级场景）。

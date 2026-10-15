@@ -21,12 +21,13 @@ const (
 	TypeScreen       CameraType = "screen"       // 屏幕采集：macOS 屏幕索引 / Linux X display(:0.0) / Windows desktop
 	TypeRTSP         CameraType = "rtsp"         // 拉取已有网络摄像头的 RTSP 流
 	TypeTestSrc      CameraType = "testsrc"      // ffmpeg 测试彩条，无需真实摄像头
+	TypeRpicam       CameraType = "rpicam"       // 树莓派 CSI 摄像头（rpicam-vid/libcamera 管线，硬件编码零转码）
 )
 
 // Valid 校验来源类型是否合法。
 func (t CameraType) Valid() bool {
 	switch t {
-	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc:
+	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam:
 		return true
 	default:
 		return false
