@@ -39,6 +39,7 @@ const MODE_OPTIONS = [
   { value: 'local', label: '本地摄像头' },
   { value: 'screen', label: '屏幕采集' },
   { value: 'rtsp', label: '网络摄像头（RTSP）' },
+  { value: 'rpicam', label: '树莓派 CSI 摄像头' },
   { value: 'testsrc', label: '测试彩条' }
 ]
 const mode = ref('local')

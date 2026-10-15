@@ -276,7 +276,8 @@ func (in *cameraInput) validate() error {
 	if t == config.TypeRTSP && !strings.HasPrefix(in.Source, "rtsp://") {
 		return badRequest("RTSP 源必须以 rtsp:// 开头")
 	}
-	if t != config.TypeTestSrc && strings.TrimSpace(in.Source) == "" {
+	// testsrc 与 rpicam 的源可空（rpicam 空表示 libcamera 默认摄像头）。
+	if t != config.TypeTestSrc && t != config.TypeRpicam && strings.TrimSpace(in.Source) == "" {
 		return badRequest("取流源不能为空")
 	}
 	checkRange := func(name string, v, min, max int) error {
