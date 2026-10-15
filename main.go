@@ -53,6 +53,7 @@ func main() {
 		rtspServer  = flag.Bool("rtsp-server", envBool("RTSP_SERVER", true), "启用内嵌 RTSP 服务器；关闭后按 --rtsp-push 推给外部 mediamtx")
 		dataDir     = flag.String("data-dir", envOr("DATA_DIR", "./data"), "配置持久化目录")
 		ffmpegBin   = flag.String("ffmpeg-bin", envOr("FFMPEG_BIN", "ffmpeg"), "ffmpeg 可执行文件路径")
+		videoEnc    = flag.String("video-encoder", envOr("VIDEO_ENCODER", "auto"), "视频编码器：auto（libx264）| libx264 | h264_v4l2m2m（V4L2 硬件编码，实验性，见 README 实测说明）")
 		discoveryOn = flag.Bool("discovery", envBool("DISCOVERY", true), "是否开启 WS-Discovery")
 		logLevel    = flag.String("log-level", envOr("LOG_LEVEL", "info"), "日志级别 debug|info|warn|error")
 		showVersion = flag.Bool("version", false, "打印版本并退出")
@@ -66,6 +67,11 @@ func main() {
 
 	logger := newLogger(*logLevel)
 	slog.SetDefault(logger)
+
+	if err := stream.SetVideoEncoder(*videoEnc); err != nil {
+		logger.Error("invalid video encoder", "err", err.Error())
+		os.Exit(1)
+	}
 
 	store, err := config.LoadStore(*dataDir)
 	if err != nil {

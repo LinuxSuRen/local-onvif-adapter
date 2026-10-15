@@ -186,7 +186,7 @@ func (r *Runner) Run() {
 	const maxBackoff = 15 * time.Second
 	var starts int
 	for !r.isStopped() {
-		args := BuildArgs(r.cam, r.pushAddr+r.camPath())
+		args := buildArgs(r.cam, r.pushAddr+r.camPath(), r.bin, r.logger)
 		cmd := exec.Command(r.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		var stderr tailBuffer
 		cmd.Stderr = &stderr
@@ -464,8 +464,14 @@ func darwinScreenCmd(c config.Camera) string {
 	)
 }
 
-// BuildArgs 构造完整的 ffmpeg 取流推流命令参数。
+// BuildArgs 构造完整的 ffmpeg 取流推流命令参数（编码器按默认 auto 解析，
+// 仅供测试与兼容旧调用；运行路径请用 buildArgs 传入实际 bin 与 logger）。
 func BuildArgs(c config.Camera, pushURL string) []string {
+	return buildArgs(c, pushURL, "ffmpeg", nil)
+}
+
+// buildArgs 构造完整的 ffmpeg 取流推流命令参数（含编码器选择与帧率兜底）。
+func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []string {
 	fps := c.FramerateOrDefault()
 	gov := fps * 2
 	if gov < 10 {
@@ -482,15 +488,9 @@ func BuildArgs(c config.Camera, pushURL string) []string {
 	if c.Type == config.TypeScreen && runtime.GOOS == "darwin" && c.Width == 0 {
 		args = append(args, "-vf", "scale=1280:-2")
 	}
-	args = append(args,
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
-		"-pix_fmt", "yuv420p",
-		"-g", fmt.Sprintf("%d", gov),
-		"-b:v", fmt.Sprintf("%dk", c.BitrateOrDefault()),
-	)
+	args = append(args, videoEncodeArgs(resolveEncoder(bin, logger), gov, c.BitrateOrDefault())...)
 	args = append(args, audioEncodeArgs(c)...)
+	args = append(args, fpsGuaranteeArgs(c)...)
 	args = append(args,
 		"-f", "rtsp",
 		"-rtsp_transport", "tcp",

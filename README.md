@@ -202,8 +202,23 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 | `--rtsp-port` | `RTSP_PORT` | `8554` | RTSP 端口（内嵌服务器监听 + 对外宣告）；仅显式指定时覆盖配置文件中的值，详见 [修改 RTSP 端口](#修改-rtsp-端口) |
 | `--data-dir` | `DATA_DIR` | `./data` | 配置持久化目录 |
 | `--ffmpeg-bin` | `FFMPEG_BIN` | `ffmpeg` | ffmpeg 路径 |
+| `--video-encoder` | `VIDEO_ENCODER` | `auto` | 视频编码器：`auto`/`libx264` 均为软编码；`h264_v4l2m2m` 为 V4L2 硬件编码（实验性，见下） |
 | `--discovery` | `DISCOVERY` | `true` | 是否开启 WS-Discovery |
 | `--log-level` | `LOG_LEVEL` | `info` | 日志级别 |
+
+## 帧率与硬件编码（树莓派等 arm 设备）
+
+- **帧率配置即生效**：设备采集源（v4l2/dshow/avfoundation）的输入帧率请求可能被驱动
+  静默忽略（实测配置 10fps 回退 30fps），程序在输出侧用 `-r` 强制对齐配置帧率——
+  高于配置抽帧、低于配置补帧。rtsp 源按源节奏转码、testsrc 自带节奏，均不强制。
+- **硬件编码（实验性，opt-in）**：`--video-encoder=h264_v4l2m2m` 在带 V4L2 M2M
+  硬件编码器的设备（树莓派 3/4）上用硬件编码，可将 armv7 上约 200% 的编码 CPU
+  降到零头。**默认不启用**——实测树莓派 3B（Raspbian trixie / ffmpeg 7.1 /
+  bcm2835-codec）上本地编码正常，但经 RTSP 分发后中途加入的读者报
+  `non-existing PPS`：bcm2835 编码器不随 GOP 周期重复 SPS/PPS，
+  `dump_extra=freq=keyframe`、去掉 `-g` 等变体均无效；树莓派 5 已移除硬件
+  编码器。待驱动/上游修复后再评估默认启用。注意硬件编码不支持 x264 的
+  `-preset`/`-tune`，参数自动分派。
 
 ## 开机自启
 
