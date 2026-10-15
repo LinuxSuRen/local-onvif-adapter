@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/linuxsuren/local-onvif-adapter/internal/config"
+	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
 )
 
 // Status 单个摄像头取流进程的运行状态。
@@ -219,10 +220,20 @@ func (r *Runner) Run() {
 		r.cmd = cmd
 		r.mu.Unlock()
 		r.setRunning(true, "", &starts)
+		// 事件：进程启动 = 信号恢复（重启后的第一拍）；Source/Lifecycle 记录启动序号
+		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
+			[]onvifserver.EventItem{{"Source", "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{"State", "false"}})
+		onvifserver.PublishEvent("lns:Source/Lifecycle",
+			[]onvifserver.EventItem{{"Camera", r.cam.ID}},
+			[]onvifserver.EventItem{{"Phase", "Started"}, {"Restarts", fmt.Sprintf("%d", starts-1)}})
 		started := time.Now()
 		err := cmd.Run()
 		if r.isStopped() {
 			r.setRunning(false, "", &starts)
+			onvifserver.PublishEvent("lns:Source/Lifecycle",
+				[]onvifserver.EventItem{{"Camera", r.cam.ID}},
+				[]onvifserver.EventItem{{"Phase", "Stopped"}})
 			return
 		}
 		msg := ""
@@ -235,6 +246,15 @@ func (r *Runner) Run() {
 		r.setRunning(false, msg, &starts)
 		r.logger.Warn("ffmpeg exited, restarting", "camera", r.cam.ID, "err", msg,
 			"uptime", time.Since(started).Round(time.Second).String())
+		// 事件：非预期退出 = 信号丢失（NVR 区分「相机挂了」与「网络挂了」）+ 重启中
+		onvifserver.PublishEvent("tns1:VideoSource/SignalLoss",
+			[]onvifserver.EventItem{{"Source", "Camera_" + r.cam.ID}},
+			[]onvifserver.EventItem{{"State", "true"}})
+		onvifserver.PublishEvent("lns:Source/Lifecycle",
+			[]onvifserver.EventItem{{"Camera", r.cam.ID}},
+			[]onvifserver.EventItem{{"Phase", "Restarting"},
+				{"Restarts", fmt.Sprintf("%d", starts-1)},
+				{"Error", trimEvent(msg, 120)}})
 		select {
 		case <-r.stopCh:
 			return
@@ -286,6 +306,18 @@ func (t *tailBuffer) Tail() string {
 }
 
 func (r *Runner) camPath() string { return "/cam/" + r.cam.ID }
+
+// trimEvent 截断错误文本用于事件载荷（stderr 尾巴可能很长，事件只要可读线索）。
+func trimEvent(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		s = s[len(s)-n:]
+		if i := strings.Index(s, " "); i > 0 {
+			s = s[i+1:]
+		}
+	}
+	return s
+}
 
 // InputArgs 按摄像头类型构造 ffmpeg 输入参数。
 // 启用音频时按平台把麦克风并入输入（dshow 联合输入 / avfoundation 双索引 /
@@ -477,9 +509,12 @@ func BuildArgs(c config.Camera, pushURL string) []string {
 		args = append(args, "-nostdin")
 	}
 	args = append(args, InputArgs(c)...)
-	// macOS 屏幕采集的 PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限，
-	// 缩放到 1280 宽保证实时性（未配置分辨率时）。
-	if c.Type == config.TypeScreen && runtime.GOOS == "darwin" && c.Width == 0 {
+	// 屏幕采集未配置分辨率时统一缩放到 1280 宽：
+	//   - macOS：PNG 帧很大（Retina 3360×2100 ≈3MB/帧），管道吞吐受限；
+	//   - Windows/Linux：多屏全分辨率（如 2752×1152）多路并发时浏览器
+	//     GPU 硬解扛不住，实测 5 路（含 3 路巨分辨率）在 Edge/Chrome 中
+	//     解码管线反复失效表现为画面闪烁；降到 1280 宽后硬解可稳定承载。
+	if c.Type == config.TypeScreen && c.Width == 0 {
 		args = append(args, "-vf", "scale=1280:-2")
 	}
 	args = append(args,

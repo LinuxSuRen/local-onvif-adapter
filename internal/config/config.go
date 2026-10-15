@@ -141,6 +141,9 @@ type Store struct {
 	mu   sync.RWMutex
 	path string
 	root *Root
+	// OnSaved 在每次成功保存后回调（锁外执行）；用于配置变更事件等旁路通知，
+	// 回调内不得再调用 Store（避免死锁）。
+	OnSaved func()
 }
 
 // LoadStore 从 dataDir 加载配置；文件不存在时创建默认配置。
@@ -213,16 +216,22 @@ func (s *Store) Root() Root {
 // Update 在写事务中修改配置并持久化；fn 返回错误则放弃全部修改（事务回滚）。
 func (s *Store) Update(fn func(r *Root) error) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	draft := s.root.clone()
 	if err := fn(&draft); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	draft.normalize()
 	if err := persist(&draft, s.path); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	s.root = &draft
+	cb := s.OnSaved
+	s.mu.Unlock()
+	if cb != nil {
+		cb() // 审计信号：配置已变更（摄像头/认证/编码参数等）；锁外执行
+	}
 	return nil
 }
 
