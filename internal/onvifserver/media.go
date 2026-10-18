@@ -468,17 +468,17 @@ func opGetEncoderOptions(s *Service, v CameraView) (string, error) {
 	body := `<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>` +
 		`<tt:QualityRange><tt:Min>1</tt:Min><tt:Max>10</tt:Max></tt:QualityRange>` +
 		topXML +
-		`<tt:JpegOptions>` + listXML +
+		`<tt:JPEG>` + listXML +
 		fmt.Sprintf(`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange>`, jpegFPSMax) +
-		`</tt:JpegOptions>` +
-		`<tt:Mpeg4Options/>` +
-		`<tt:H264Options>` + listXML +
+		`</tt:JPEG>` +
+		`<tt:MPEG4/>` +
+		`<tt:H264>` + listXML +
 		`<tt:GovLengthRange><tt:Min>1</tt:Min><tt:Max>120</tt:Max></tt:GovLengthRange>` +
 		fmt.Sprintf(`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange>`, h264FPSMax) +
-		`<tt:EncodingProfiles>Baseline</tt:EncodingProfiles>` +
-		`<tt:EncodingProfiles>Main</tt:EncodingProfiles>` +
-		`<tt:EncodingProfiles>High</tt:EncodingProfiles>` +
-		`</tt:H264Options>` +
+		`<tt:H264ProfilesSupported>Baseline</tt:H264ProfilesSupported>` +
+		`<tt:H264ProfilesSupported>Main</tt:H264ProfilesSupported>` +
+		`<tt:H264ProfilesSupported>High</tt:H264ProfilesSupported>` +
+		`</tt:H264>` +
 		`</trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>`
 	return body, nil
 }
