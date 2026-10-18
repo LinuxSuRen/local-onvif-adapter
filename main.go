@@ -170,6 +170,9 @@ func main() {
 		root := store.Root()
 		streams.Sync(root.Cameras)
 	}
+	// rpicam 源的分辨率候选来自传感器真实模式（rpicam-hello 探测，进程内缓存），
+	// 其余源类型探测器返回空，ONVIF 侧回退静态列表。
+	onvifSvc.EncoderResolutions = stream.RpiCamResolutions
 
 	apiSrv := api.NewServer(store, ptzReg, streams, snaps, onvifSvc, version, logger)
 	// 启用中的摄像头抓拍优先从取流服务拉帧（设备独占：dshow/v4l2 无法二次打开）。
