@@ -33,6 +33,7 @@ func init() {
 	registerPTZOps()
 	registerImagingOps()
 	registerEventsOps()
+	registerPushOps()
 }
 
 func reg(ns, op string, h opHandler) {

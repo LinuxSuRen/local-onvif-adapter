@@ -13,6 +13,7 @@ const envelopeHeader = `<?xml version="1.0" encoding="UTF-8"?>` +
 	` xmlns:trt="http://www.onvif.org/ver10/media/wsdl"` +
 	` xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"` +
 	` xmlns:timg="http://www.onvif.org/ver10/imaging/wsdl"` +
+	` xmlns:lns="http://www.linuxsuren.com/onvif/ext"` +
 	` xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing">`
 
 // soapEnvelope 包裹响应体片段。
