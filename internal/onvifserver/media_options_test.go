@@ -77,7 +77,7 @@ func TestEncoderOptionsFallback(t *testing.T) {
 	if n := strings.Count(body, resXML(1280, 720)); n != 3 {
 		t.Fatalf("1280x720 appears %d times, want 3: %s", n, body)
 	}
-	if !strings.Contains(body, `<tt:JpegOptions>`) || !strings.Contains(body, `<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>15</tt:Max></tt:FrameRateRange></tt:JpegOptions>`) {
+	if !strings.Contains(body, `<tt:JPEG>`) || !strings.Contains(body, `<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>15</tt:Max></tt:FrameRateRange></tt:JPEG>`) {
 		t.Fatalf("jpeg frame rate should follow camera config (15): %s", body)
 	}
 }
