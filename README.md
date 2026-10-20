@@ -104,6 +104,7 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 | `dshow` | Windows | `ffmpeg -list_devices` | 设备名 |
 | `rtsp` | 任意 | 手动填写 | `rtsp://user:pass@ip:554/stream` |
 | `rpicam` | 树莓派 | 无需选择（libcamera 默认摄像头） | 留空；多摄像头填 libcamera 索引 |
+| `realsense` | 任意（设备需 USB 直连） | 无需选择（rs-pipe 统一取三路） | `tcp://127.0.0.1:1802{0,1,2}` |
 | `testsrc` | 任意 | 无需设备 | 留空 |
 
 `rpicam` 类型走 **libcamera 管线**（`rpicam-vid`）：新版树莓派系统的 CSI 摄像头
@@ -112,6 +113,39 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 重发，RTSP 读者中途加入可解码），ffmpeg 仅 `-c copy` 直通封装——**零转码**，
 分辨率/帧率/码率由 libcamera 强制执行（无驱动静默回退问题）。快照走
 `rpicam-still` 原生输出。
+
+### RealSense 深度相机（RGB / 伪彩色深度 / IR 三路）
+
+RealSense（D435/D455 等）设备 **USB 独占**——同一时刻只允许一个进程访问，
+因此由本仓库自带的 `rs-pipe` 采集分发器统一打开设备、一次取齐三路帧，
+再以 rawvideo TCP 裸流（rgb24 定长帧）分发，每路各起一个 ffmpeg 编码推流：
+
+```
+cmd/rs-pipe（独占设备，默认端口 18020/18021/18022）
+  ├─ color  RGB 彩色  ── tcp://127.0.0.1:18020 ─→ ffmpeg → H264 → RTSP /cam/<id>
+  ├─ depth  Turbo 伪彩色（Z16 毫米 → 固定范围映射）── :18021 ─→ ffmpeg → RTSP
+  └─ ir     红外灰度（Y8）── :18022 ─→ ffmpeg → RTSP
+```
+
+使用步骤：
+
+1. 编译采集器并放到 adapter 可寻址位置（默认 `realsense_bin=rs-pipe`）：
+   ```bash
+   # 无 SDK（fake 合成帧，离线链路验证）
+   go build -o rs-pipe ./cmd/rs-pipe
+   # 真机（需系统安装 librealsense2）
+   CGO_ENABLED=1 go build -tags realsense -o rs-pipe ./cmd/rs-pipe
+   ```
+2. 管理台添加三个摄像头（类型 `realsense`），源分别填
+   `tcp://127.0.0.1:18020`（color）、`:18021`（depth）、`:18022`（ir）；
+   三路的分辨率/帧率保持一致（rs-pipe 统一按第一路生效配置启用三路流，
+   默认 640x480@15）。
+3. 有任一 `realsense` 摄像头启用时 adapter 自动拉起 rs-pipe，全部停用后自动回收。
+
+深度伪彩色采用固定范围 Turbo 映射（默认 300–8000mm，`--depth-min/--depth-max`
+可调），颜色可复现、可用于目测距离；无效深度点（0）显示为纯黑。
+`realsense_fake=true`（配置文件）或 `rs-pipe serve --fake` 以合成帧运行——
+无硬件也能全链路验证（彩条移动/深度斜面+移动方块/灰度同步）。
 
 每个摄像头可配置分辨率（0 表示自动）、帧率、码率、是否红外、是否启用。
 枚举列表也支持手动输入设备源（高级场景）。

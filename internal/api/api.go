@@ -276,6 +276,10 @@ func (in *cameraInput) validate() error {
 	if t == config.TypeRTSP && !strings.HasPrefix(in.Source, "rtsp://") {
 		return badRequest("RTSP 源必须以 rtsp:// 开头")
 	}
+	// RealSense 源是 rs-pipe 分发的 rawvideo TCP 流（默认端口 18020=color/18021=depth/18022=ir）。
+	if t == config.TypeRealSense && !strings.HasPrefix(in.Source, "tcp://") {
+		return badRequest("RealSense 源必须以 tcp:// 开头（rs-pipe 分发地址，如 tcp://127.0.0.1:18020）")
+	}
 	// testsrc 与 rpicam 的源可空（rpicam 空表示 libcamera 默认摄像头）。
 	if t != config.TypeTestSrc && t != config.TypeRpicam && strings.TrimSpace(in.Source) == "" {
 		return badRequest("取流源不能为空")

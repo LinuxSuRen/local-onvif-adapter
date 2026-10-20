@@ -49,6 +49,12 @@ type Manager struct {
 	lastAddr string        // 上次使用的推流地址；变化即全部重启
 	bin      string
 	logger   *slog.Logger
+	// RealSense 采集分发器（rs-pipe）：三路流共用一个守护进程。
+	rsBin   string
+	rsFake  bool
+	rsPipe  *rsPipe
+	rsSpec  rsPipeSpec
+	rsWants bool
 }
 
 // NewManager 创建取流管理器。pushBase 返回推流目标（形如 rtsp://127.0.0.1:8554，
@@ -61,8 +67,19 @@ func NewManager(pushBase func() string, bin string, logger *slog.Logger) *Manage
 		runners:  map[string]*Runner{},
 		pushBase: pushBase,
 		bin:      bin,
+		rsBin:    "rs-pipe",
 		logger:   logger,
 	}
+}
+
+// ConfigureRealsense 设置 rs-pipe 二进制与合成帧模式（Sync 前调用）。
+func (m *Manager) ConfigureRealsense(bin string, fake bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if bin != "" {
+		m.rsBin = bin
+	}
+	m.rsFake = fake
 }
 
 // Spec 描述摄像头取流的关键参数，任一变化即需要重启进程。
@@ -118,6 +135,21 @@ func (m *Manager) Sync(cameras []config.Camera) {
 		m.runners[id] = r
 		go r.Run()
 	}
+
+	// rs-pipe 守护：有启用的 realsense 摄像头即拉起（参数变化重启），否则回收。
+	if spec, wants := rsPipeSpecOf(cameras); wants {
+		if m.rsPipe == nil || m.rsSpec.fingerprint() != spec.fingerprint() {
+			if m.rsPipe != nil {
+				m.rsPipe.Stop()
+			}
+			m.rsSpec = spec
+			m.rsPipe = newRsPipe(spec, m.rsBin, m.rsFake, m.logger)
+			go m.rsPipe.Run()
+		}
+	} else if m.rsPipe != nil {
+		m.rsPipe.Stop()
+		m.rsPipe = nil
+	}
 }
 
 // StopAll 停止全部进程。
@@ -127,6 +159,10 @@ func (m *Manager) StopAll() {
 	for id, r := range m.runners {
 		r.Stop()
 		delete(m.runners, id)
+	}
+	if m.rsPipe != nil {
+		m.rsPipe.Stop()
+		m.rsPipe = nil
 	}
 }
 
@@ -437,6 +473,20 @@ func InputArgs(c config.Camera) []string {
 	case config.TypeRpicam:
 		// rpicam-vid（libcamera）经 stdin 管道喂 H264 裸流，见 rpicamVidArgs。
 		args = append(args, "-f", "h264", "-i", "pipe:")
+	case config.TypeRealSense:
+		// rs-pipe 分发的 rawvideo TCP 裸流（rgb24 定长帧，无容器头）。
+		// 分辨率/帧率声明必须与 rs-pipe 启动参数一致（默认 640x480@15）。
+		w, h := 640, 480
+		if c.Width > 0 && c.Height > 0 {
+			w, h = c.Width, c.Height
+		}
+		args = append(args,
+			"-f", "rawvideo",
+			"-pixel_format", "rgb24",
+			"-video_size", fmt.Sprintf("%dx%d", w, h),
+			"-framerate", fmt.Sprintf("%d", fps),
+			"-i", c.Source,
+		)
 	case config.TypeTestSrc:
 		w, h := 1280, 720
 		if c.Width > 0 && c.Height > 0 {

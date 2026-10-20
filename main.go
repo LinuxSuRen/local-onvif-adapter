@@ -163,6 +163,7 @@ func main() {
 
 	ptzReg := ptzmock.NewRegistry()
 	streams := stream.NewManager(func() string { return withCreds(pushBase) }, root.Server.FFmpegBin, logger)
+	streams.ConfigureRealsense(root.Server.RealsenseBin, root.Server.RealsenseFake)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
 	// ONVIF 客户端修改编码参数后，重启对应取流进程。
