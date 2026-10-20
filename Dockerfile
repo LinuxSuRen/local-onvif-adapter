@@ -1,17 +1,20 @@
 # ---- 前端构建 ----
 FROM node:20-alpine AS web
+ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm config set registry ${NPM_REGISTRY} && npm ci
 COPY web/ ./
 RUN npm run build
 
 # ---- 后端构建 ----
 FROM golang:1.24-alpine AS build
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY cmd/ cmd/
+COPY *.go ./
 COPY internal/ internal/
 COPY web/embed.go web/embed.go
 COPY --from=web /src/web/dist web/dist/

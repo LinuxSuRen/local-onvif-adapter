@@ -55,30 +55,71 @@ ffplay rtsp://admin:密码@<本机IP>:8554/cam/<摄像头ID>
 
 ## 快速开始
 
-### 容器一键启动（推荐）
+### 容器运行（Windows / macOS / Linux）
+
+镜像是多阶段构建的 Linux 容器（node 构建前端 → go 构建后端 → alpine + ffmpeg 运行），
+三种宿主机上跑的都是同一份镜像；平台差异集中在**网络模式**与**本地摄像头透传**两点：
+
+| 宿主机 | 推荐方式 | UI/API/RTSP | WS-Discovery 自动发现 | 本地摄像头采集 |
+|---|---|---|---|---|
+| Linux | host 网络（默认） | ✅ | ✅ | ✅ 映射 `/dev/video*` |
+| Windows / macOS（默认安装） | bridge 服务（端口映射） | ✅ | ❌ 手填接入地址 | ❌ 用 rtsp/testsrc 源 |
+| Windows / macOS（Desktop ≥ 4.34 开启 host networking） | host 网络 | ✅ | ⚠️ 组播不保证 | ❌ 用 rtsp/testsrc 源 |
+
+> **为什么 Windows/macOS 容器采不到本地摄像头**：Docker Desktop 的容器运行在内置
+> Linux 虚拟机里，宿主机的 dshow/avfoundation 设备无法透传进 VM（设备映射只对
+> Linux 的 `/dev/video*` 有效）。容器内可正常使用 `rtsp`（网络相机）与 `testsrc`
+> 源；要采集宿主机 USB 摄像头，请下载对应平台原生二进制运行（见[发布](#发布)），
+> 并用 `install` 子命令注册开机自启（见[开机自启](#开机自启)）。容器自身的
+> "开机自启"由 `restart: unless-stopped` 承担：Docker 服务随宿主机启动后容器自动拉起。
+
+#### Linux（host 网络，全功能）
 
 ```bash
 make up        # docker compose up -d --build（host 网络，单容器，无需 mediamtx）
 ```
 
-启动后：
+- WS-Discovery 的 UDP 3702 组播与 RTSP 取流都最顺畅
+- 接入 USB 摄像头：在 `docker-compose.yml` 中取消对应设备映射注释，然后到管理台
+  添加摄像头（类型选 `v4l2`，源填 `/dev/video0`）：
+
+  ```yaml
+      volumes:
+        - /dev/video0:/dev/video0
+  ```
+
+#### Windows / macOS（bridge 模式，开箱即用）
+
+```bash
+ADVERTISE_IP=<宿主机局域网IP> docker compose up -d --build local-onvif-adapter-bridge
+```
+
+- **`ADVERTISE_IP` 必填**（bridge 模式下的头号坑）：桥接网络里自动探测拿到的是
+  容器内网 IP（172.x），而 `GetStreamUri`/快照地址/XAddr 宣告的都是这个 IP，局域网
+  客户端将无法访问。环境变量每次启动都会写回配置，宿主机 IP 变化后改这里重启即可
+- 端口映射：`8080`（UI/API/SOAP）、`8554`（RTSP over TCP，推荐）；RTSP over UDP
+  需再放开 `8000-8001/udp` 映射，或客户端直接走 TCP：
+  `ffplay -rtsp_transport tcp rtsp://<宿主机IP>:8554/cam/<摄像头ID>`
+- **宿主机端口被占用时**：映射端口须与容器内端口保持一致（服务对外宣告的是
+  容器内实际端口），换端口要同时调整环境变量并映射同号端口，例如
+  `-e HTTP_ADDR=:18080 -p 18080:18080`、`-e RTSP_PORT=18554 -p 18554:18554`
+- **WS-Discovery 组播无法穿越 bridge 网络**：ONVIF 客户端里手动填接入地址
+  `http://<宿主机IP>:8080/onvif/device_service`（UI 首页可复制）
+- Windows 首次使用需在防火墙放行入站 TCP 8080/8554
+- 管理台添加摄像头时选 `rtsp` / `testsrc` 类型（容器枚举不到宿主机设备）
+
+#### Windows / macOS（Docker Desktop host networking）
+
+Docker Desktop 4.34+ 可在 Settings → Resources → Network 勾选 *Enable host
+networking*（Windows 需 WSL2 后端），之后与 Linux 一样直接 `docker compose up -d
+--build`：端口直接绑定宿主机，无需 ports 映射。但该特性下 UDP 组播（WS-Discovery
+自动发现）不保证可用，客户端发现不了时用手填接入地址兜底。
+
+#### 启动后
 
 - 管理台：<http://localhost:8080/>
 - ONVIF 接入地址：`http://<本机IP>:8080/onvif/device_service`（UI 首页可复制）
 - RTSP：`rtsp://<本机IP>:8554/cam/<摄像头ID>`
-
-Linux 下接入 USB 摄像头，在 `docker-compose.yml` 中取消对应设备映射注释：
-
-```yaml
-    volumes:
-      - /dev/video0:/dev/video0
-```
-
-然后到管理台添加摄像头（类型选 `v4l2`，源填 `/dev/video0`）。
-
-compose 使用 **host 网络模式**：WS-Discovery 的 UDP 3702 组播与 RTSP 取流都最顺畅。
-macOS Docker Desktop 需较新版本（支持 host networking）；组播发现不可用的环境，
-在客户端里手动填 ONVIF 接入地址即可。
 
 ### 本地开发
 
@@ -195,7 +236,7 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 │   └── stream/               # ffmpeg 取流进程监督（退避重启）
 ├── web/                      # Vue3 管理台（构建产物内嵌）
 ├── Dockerfile                # 多阶段：node 构建前端 → go 构建后端 → alpine+ffmpeg
-├── docker-compose.yml        # 单容器（host 网络）
+├── docker-compose.yml        # 单容器双模式：host 网络（默认）/ bridge（--profile bridge，Win/mac）
 └── Makefile
 ```
 
@@ -230,25 +271,43 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 
 ## 开机自启
 
-Windows 下提供子命令一键注册/卸载开机自启（用户登录时静默启动，无控制台闪窗）：
+三平台（Windows / Linux / macOS）统一提供 `install` / `uninstall` 子命令，一键注册/卸载
+开机自启；`install -dry-run` 只打印将注册的内容，不落盘：
 
-```powershell
+```bash
 # 注册：记录当前可执行文件与 data-dir，并从既有配置重建完整启动参数
-local-onvif-adapter.exe install -data-dir D:\path\to\data
+local-onvif-adapter install -data-dir /path/to/data
 # 预览将注册的内容（不落盘）
-local-onvif-adapter.exe install -data-dir D:\path\to\data -dry-run
+local-onvif-adapter install -data-dir /path/to/data -dry-run
 # 卸载（幂等）
-local-onvif-adapter.exe uninstall -data-dir D:\path\to\data
+local-onvif-adapter uninstall -data-dir /path/to/data
 ```
 
-实现：HKCU `Run` 注册表键 + data-dir 下的 VBS 隐藏窗口启动器；免管理员权限。
-**为什么是"登录时启动"而不是系统服务**：采集桌面（gdigrab）与摄像头（dshow）
-要求进程运行在交互式用户会话中，SYSTEM 服务位于 Session 0 采不到画面。
-注意：移动可执行文件或数据目录后需重新执行 `install`；主程序每次启动会把
-命令行参数写回配置文件，因此 `install` 会显式携带当前配置的完整参数，
-避免自启动把用户配置重置为默认值。
+各平台实现：
 
-### 其他平台（手动配置）
+| 平台 | 机制 | 触发时机 |
+|---|---|---|
+| Windows | HKCU `Run` 注册表 + data-dir 下 VBS 隐藏窗口启动器（免管理员） | 用户登录（静默无闪窗） |
+| Linux | systemd 用户单元 `~/.config/systemd/user/local-onvif-adapter.service` + `enable --now`，并尝试 `loginctl enable-linger` | 开机即启（linger 成功时），否则首次登录 |
+| macOS | launchd `~/Library/LaunchAgents/com.linuxsuren.local-onvif-adapter.plist` + `launchctl load` | 用户登录 |
+
+通用说明：
+
+- **登录会话而非系统服务**：采集桌面（gdigrab/x11grab/avfoundation）与摄像头
+  （dshow/avfoundation）都要求进程运行在交互式用户会话中；Linux 的 v4l2/rtsp 源
+  不依赖图形会话，`enable-linger` 成功后即为真正的开机即启（无头场景）
+- Linux 下在容器/SSH 中执行 `install`（无 systemd 用户会话）会写入单元文件但
+  `systemctl --user` 失败，按提示在本机登录会话中补执行 `daemon-reload` + `enable`
+  即可；**容器场景不要用 systemd**，用 compose 的 `restart: unless-stopped`——
+  Docker 服务随宿主机启动后容器自动拉起，即容器版的"开机自启"
+- macOS 的 launchd 作业日志落在 `data-dir/autostart.out.log` / `autostart.err.log`
+- 注意：移动可执行文件或数据目录后需重新执行 `install`；主程序每次启动会把
+  命令行参数写回配置文件，因此 `install` 会显式携带当前配置的完整参数，
+  避免自启动把用户配置重置为默认值
+
+### 手动配置（兜底）
+
+`install` 生成的单元/plist 与以下手工写法等价，特殊定制时参考：
 
 Linux（systemd 用户单元）：
 
@@ -257,16 +316,18 @@ mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/local-onvif-adapter.service <<'EOF'
 [Unit]
 Description=local ONVIF adapter
-After=graphical-session.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/local-onvif-adapter -data-dir %h/.local-onvif-adapter
 Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=default.target
 EOF
-systemctl --user enable --now local-onvif-adapter
+systemctl --user daemon-reload && systemctl --user enable --now local-onvif-adapter
 ```
 
 macOS（launchd，登录时启动）：
@@ -282,7 +343,9 @@ cat > ~/Library/LaunchAgents/com.linuxsuren.local-onvif-adapter.plist <<'EOF'
     <string>-data-dir</string><string>/Users/USERNAME/.local-onvif-adapter</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>/Users/USERNAME/.local-onvif-adapter/autostart.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/USERNAME/.local-onvif-adapter/autostart.err.log</string>
 </dict></plist>
 EOF
 launchctl load ~/Library/LaunchAgents/com.linuxsuren.local-onvif-adapter.plist
