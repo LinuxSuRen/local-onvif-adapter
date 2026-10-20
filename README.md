@@ -129,18 +129,61 @@ cmd/rs-pipe（独占设备，默认端口 18020/18021/18022）
 
 使用步骤：
 
-1. 编译采集器并放到 adapter 可寻址位置（默认 `realsense_bin=rs-pipe`）：
-   ```bash
-   # 无 SDK（fake 合成帧，离线链路验证）
-   go build -o rs-pipe ./cmd/rs-pipe
-   # 真机（需系统安装 librealsense2）
-   CGO_ENABLED=1 go build -tags realsense -o rs-pipe ./cmd/rs-pipe
-   ```
+1. 编译采集器并放到 adapter 可寻址位置（默认 `realsense_bin=rs-pipe`），
+   按平台安装依赖后构建（见下方「rs-pipe 真机构建」）。
 2. 管理台添加三个摄像头（类型 `realsense`），源分别填
    `tcp://127.0.0.1:18020`（color）、`:18021`（depth）、`:18022`（ir）；
    三路的分辨率/帧率保持一致（rs-pipe 统一按第一路生效配置启用三路流，
    默认 640x480@15）。
 3. 有任一 `realsense` 摄像头启用时 adapter 自动拉起 rs-pipe，全部停用后自动回收。
+
+#### rs-pipe 真机构建
+
+librealsense 依赖以构建标签 `realsense` 隔离：默认构建（含 CI / goreleaser /
+交叉编译）零 cgo 依赖；真机版需系统安装 librealsense2 后带标签编译。
+无 SDK 环境直接 `go build -o rs-pipe ./cmd/rs-pipe` 得到 fake-only 版本，
+配合 `--fake` 即可离线验证全链路。
+
+**Linux（Ubuntu/Debian）**：
+
+```bash
+sudo apt install librealsense2-dev        # 或按 librealsense 文档从源码仓库安装
+CGO_ENABLED=1 go build -tags realsense -o rs-pipe ./cmd/rs-pipe
+```
+
+**Windows**：
+
+1. 装 [librealsense SDK](https://github.com/IntelRealSense/librealsense/releases)
+   Windows 安装包（自带 USB 驱动），默认路径
+   `C:\Program Files (x86)\Intel RealSense SDK 2.0`；
+   可先用其自带的 RealSense Viewer 确认设备出图正常。
+2. 装 cgo 所需的 gcc（二选一）：MSYS2 的
+   `pacman -S mingw-w64-ucrt-x86_64-gcc`，或 [WinLibs](https://winlibs.com/)
+   解压后加入 PATH。
+3. 编译（PowerShell，SDK 装在非默认搜索路径，需环境变量补充头文件/库路径）：
+
+   ```powershell
+   $env:CGO_ENABLED = "1"
+   $env:CGO_CFLAGS = '-IC:\Program Files (x86)\Intel RealSense SDK 2.0\include'
+   $env:CGO_LDFLAGS = '-LC:\Program Files (x86)\Intel RealSense SDK 2.0\lib\x64 -lrealsense2'
+   go build -tags realsense -o rs-pipe.exe .\cmd\rs-pipe
+   ```
+
+4. 把 SDK `bin\x64\realsense2.dll` 复制到 `rs-pipe.exe` 同目录（或将该目录
+   加入 PATH），否则启动报找不到 DLL；首次运行 Windows 防火墙弹窗时放行
+   rs-pipe 的本地监听。
+
+**macOS**：`brew install librealsense`（注意：官方对 macOS 支持有限，
+D4 系列需 USB3 且部分功能不可用，建议优先 Linux/Windows）。
+
+**验证**（三步都通再到管理台加摄像头）：
+
+```bash
+rs-pipe list        # 应列出序列号与型号
+rs-pipe serve       # 监听 18020/18021/18022
+ffplay -f rawvideo -pixel_format rgb24 -video_size 640x480 -framerate 15 \
+  tcp://127.0.0.1:18021    # 直接看伪彩色深度画面
+```
 
 深度伪彩色采用固定范围 Turbo 映射（默认 300–8000mm，`--depth-min/--depth-max`
 可调），颜色可复现、可用于目测距离；无效深度点（0）显示为纯黑。
