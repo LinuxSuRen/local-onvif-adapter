@@ -53,6 +53,52 @@ ffplay rtsp://admin:密码@<本机IP>:8554/cam/<摄像头ID>
 - 口令明文存于本地配置文件：RTSP Digest 与 WS-PasswordDigest 的服务端校验
   都要求明文参与哈希，无法只存摘要
 
+## 按需直推（lns: 扩展动作）
+
+面向树莓派等资源受限设备的「一次推流」能力：云端观看时，由本服务把流**直接推到
+远端媒体入口**（RTSP ANNOUNCE 到 mediamtx 等，也支持 RTMP/RTMPS/SRT），
+取流端控制器不再需要拉流再转发——采集、编码、上送各只发生一次。
+标准 ONVIF 客户端不识别这些动作，行为完全不受影响。
+
+在标准 `device_service` SOAP 端点上提供 4 个厂商命名空间
+（`xmlns:lns="http://www.linuxsuren.com/onvif/ext"`）扩展动作
+（设备面认证开启时与其他操作同策略，不在免认证白名单）：
+
+| 动作 | 请求 | 应答 |
+|---|---|---|
+| `lns:StartPushStream` | `ProfileToken`、`TargetURL`（含 userinfo 凭证） | `PushToken` |
+| `lns:RenewPushStream` | `PushToken` | 租约顺延 |
+| `lns:StopPushStream` | `PushToken` | 停推 |
+| `lns:GetPushStreams` | 空 | 会话列表（Target 已脱敏） |
+
+```xml
+<s:Body>
+  <lns:StartPushStream>
+    <lns:ProfileToken>profile_cam1</lns:ProfileToken>
+    <lns:TargetURL>rtsp://user:pass@cloud:8554/robot/r1/cam1</lns:TargetURL>
+  </lns:StartPushStream>
+</s:Body>
+```
+
+生命周期语义（对 controller 侧的契约）：
+
+- **幂等**：同 `(ProfileToken, TargetURL)` 重复 Start 返回同一 `PushToken`，不重启进程
+- **租约**：默认 TTL 10 分钟，以约 1/3 周期 `RenewPushStream` 续租；到期未续自动停推
+  （防 controller 崩溃后白占上行带宽），事件 `lns:Push/Stopped(Reason=lease_expired)`
+- **失败预算**：远端不可达连续失败 10 次即摘除会话并发布 `lns:Push/Failed`，
+  进程回到仅本地 RTSP 形态，绝无限重启；controller 收到 Failed 可回退拉流模式
+- **状态事件**（经标准 PullPoint 订阅，话题命名空间 `http://www.linuxsuren.com/onvif/topics`）：
+  `lns:Push/Started`、`lns:Push/Failed`、`lns:Push/Stopped(Reason=explicit|lease_expired|failure_budget|source_gone)`
+- **凭证**：TargetURL 仅会话期内存持有、不落盘；日志与事件中一律 `user:***@` 脱敏
+- **能力宣告**：WS-Discovery 与 `GetScopes` 均携带
+  `onvif://www.linuxsuren.com/feature/push-stream`，controller 发现阶段即可免探测
+  识别直推能力（无此能力的相机自动回退拉流，双模式自适应见设计文档）
+
+媒体面实现：目标列表纳入取流进程指纹，ffmpeg 单进程 `-f tee` 多路输出
+（本地 RTSP 常开 + 会话期远端直推），编码只做一次；起停推流会重启该路进程，
+冷启动 1~3 秒。详细设计与 controller 侧双模式自适应方案见
+[docs/push-stream-design.md](docs/push-stream-design.md)。
+
 ## 快速开始
 
 ### 容器一键启动（推荐）

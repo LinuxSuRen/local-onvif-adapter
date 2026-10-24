@@ -165,6 +165,9 @@ func main() {
 	streams := stream.NewManager(func() string { return withCreds(pushBase) }, root.Server.FFmpegBin, logger)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
+	// 按需直推：lns:StartPushStream 等扩展动作由取流管理器承接
+	//（会话租约/失败预算/tee 多输出见 internal/stream/push.go）。
+	onvifSvc.PushCtrl = streams
 	// ONVIF 客户端修改编码参数后，重启对应取流进程。
 	onvifSvc.OnEncoderChange = func(_ config.Camera) {
 		root := store.Root()
@@ -209,6 +212,8 @@ func main() {
 		"onvif://www.onvif.org/type/ptz",
 		"onvif://www.onvif.org/Profile/Streaming",
 		"onvif://www.onvif.org/name/" + root.Model,
+		// 厂商能力宣告：支持 lns: 按需直推（controller 据此免探测选择直推模式）
+		"onvif://www.linuxsuren.com/feature/push-stream",
 	}
 	responder := discovery.New("urn:uuid:local-onvif-adapter-"+root.Serial, uris.XAddr(), scopes, logger)
 	if root.Server.Discovery {
