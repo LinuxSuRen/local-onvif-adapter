@@ -53,6 +53,7 @@ jobs:
           TARGETS=(
             "linux/amd64"
             "linux/arm64"
+            "linux/armv7"
             "darwin/amd64"
             "darwin/arm64"
             "windows/amd64"
@@ -60,11 +61,25 @@ jobs:
           )
           for target in "${TARGETS[@]}"; do
             GOOS="${target%%/*}"
-            GOARCH="${target##*/}"
-            NAME="local-onvif-adapter_${GOOS}_${GOARCH}"
+            ARCH="${target##*/}"
+            # armv7：GOARCH=arm + GOARM=7（32 位 Raspbian 等树莓派系统）；
+            # 其余目标 GOARCH 即别名本身。产物名保持用户友好的架构别名。
+            GOARM=""
+            GOARCH="${ARCH}"
+            if [ "${ARCH}" = "armv7" ]; then
+              GOARCH="arm"
+              GOARM="7"
+            fi
+            NAME="local-onvif-adapter_${GOOS}_${ARCH}"
             echo "==> building ${NAME}"
+            if [ -n "${GOARM}" ]; then
+              export GOARM
+            else
+              unset GOARM
+            fi
             CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
               go build -trimpath -ldflags "${LDFLAGS}" -o "dist/${NAME}/local-onvif-adapter" .
+            unset GOARM
             cp LICENSE README.md "dist/${NAME}/"
             if [ "${GOOS}" = "windows" ]; then
               (cd "dist/${NAME}" && zip -r "../${NAME}.zip" .)
