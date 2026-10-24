@@ -82,6 +82,13 @@ type imagingSettings struct {
 	Sharpness       float64
 }
 
+// ResolutionOption 是一个传感器可选分辨率模式（含该模式最大帧率）。
+type ResolutionOption struct {
+	Width  int
+	Height int
+	MaxFPS int
+}
+
 // Service 是 ONVIF SOAP 服务的核心依赖集合。
 type Service struct {
 	store   *config.Store
@@ -92,6 +99,12 @@ type Service struct {
 	imaging map[string]imagingSettings
 	// OnEncoderChange 在编码参数被 ONVIF 客户端修改后回调（用于重启取流）。
 	OnEncoderChange func(cam config.Camera)
+	// PushCtrl 按需直推会话控制面（stream.Manager 实现；nil 时 lns: 推流动作报不支持）。
+	PushCtrl PushController
+	// EncoderResolutions 可选：按摄像头返回传感器真实支持的分辨率模式
+	//（如 rpicam 探测 CSI 传感器），GetVideoEncoderConfigurationOptions 据此
+	// 下发 ResolutionsAvailable；返回空表示未知，回退静态列表。
+	EncoderResolutions func(cam config.Camera) []ResolutionOption
 }
 
 // NewService 创建 ONVIF 服务。

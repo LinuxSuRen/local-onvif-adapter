@@ -88,19 +88,97 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 
 func TestRunInstallDryRun(t *testing.T) {
 	dir := t.TempDir()
+	switch runtime.GOOS {
+	case "linux":
+		// 单元目录跟随 XDG_CONFIG_HOME，指向临时目录便于断言未落盘。
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	case "darwin":
+		t.Setenv("HOME", filepath.Join(dir, "home"))
+	}
 	code := runInstall([]string{"-data-dir", dir, "-dry-run"})
-	if runtime.GOOS == "windows" {
-		if code != 0 {
-			t.Fatalf("install -dry-run exit = %d, want 0", code)
-		}
-		// dry-run 不落任何文件。
-		if _, err := os.Stat(filepath.Join(dir, autostartVBSName)); !os.IsNotExist(err) {
-			t.Fatalf("dry-run should not write vbs: %v", err)
+	if !autostartSupported() {
+		// 不支持的平台入口即失败退出（无误导性预览）。
+		if code != 1 {
+			t.Fatalf("install -dry-run exit = %d on %s, want 1", code, runtime.GOOS)
 		}
 		return
 	}
-	// 非 Windows：入口即判平台支持，dry-run 也应失败退出（无误导性预览）。
-	if code != 1 {
-		t.Fatalf("install -dry-run exit = %d on %s, want 1", code, runtime.GOOS)
+	if code != 0 {
+		t.Fatalf("install -dry-run exit = %d, want 0", code)
+	}
+	// dry-run 不落任何文件。
+	switch runtime.GOOS {
+	case "windows":
+		if _, err := os.Stat(filepath.Join(dir, autostartVBSName)); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not write vbs: %v", err)
+		}
+	case "linux":
+		unit := filepath.Join(dir, "xdg", "systemd", "user", autostartUnitName)
+		if _, err := os.Stat(unit); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not write unit: %v", err)
+		}
+	case "darwin":
+		plist := filepath.Join(dir, "home", "Library", "LaunchAgents", autostartPlistName)
+		if _, err := os.Stat(plist); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not write plist: %v", err)
+		}
+	}
+}
+
+func TestSystemdUnitContent(t *testing.T) {
+	got := systemdUnitContent("/usr/local/bin/local-onvif-adapter", "/home/rick/.local-onvif-adapter",
+		[]string{"-http-addr", ":1235", "-advertise-ip", "192.168.1.10"})
+	for _, want := range []string{
+		"ExecStart=/usr/local/bin/local-onvif-adapter -data-dir /home/rick/.local-onvif-adapter -http-addr :1235 -advertise-ip 192.168.1.10",
+		"Restart=on-failure",
+		"WantedBy=default.target",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("unit content missing %q:\n%s", want, got)
+		}
+	}
+	// 参数含空格/引号必须按 systemd 规则转义。
+	got = systemdUnitContent(`/opt/my app/adapter`, `/data dir`, []string{"-ffmpeg-bin", `/opt/my tools/ffmpeg`})
+	if !strings.Contains(got, `ExecStart="/opt/my app/adapter" -data-dir "/data dir" -ffmpeg-bin "/opt/my tools/ffmpeg"`) {
+		t.Fatalf("spaced args not quoted:\n%s", got)
+	}
+}
+
+func TestQuoteSystemdArg(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"plain", "plain"},
+		{"", `""`},
+		{"has space", `"has space"`},
+		{`has"quote`, `"has\"quote"`},
+	}
+	for _, c := range cases {
+		if got := quoteSystemdArg(c.in); got != c.want {
+			t.Fatalf("quoteSystemdArg(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestLaunchdPlistContent(t *testing.T) {
+	got := launchdPlistContent("/usr/local/bin/local-onvif-adapter", "/Users/rick/.local-onvif-adapter",
+		[]string{"-http-addr", ":1235"})
+	for _, want := range []string{
+		"<string>" + autostartLabel + "</string>",
+		"<string>/usr/local/bin/local-onvif-adapter</string>",
+		"<string>-data-dir</string>",
+		"<string>/Users/rick/.local-onvif-adapter</string>",
+		"<string>-http-addr</string>",
+		"<string>:1235</string>",
+		"<key>RunAtLoad</key>",
+		"<key>SuccessfulExit</key>",
+		"autostart.out.log",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("plist content missing %q:\n%s", want, got)
+		}
+	}
+	// XML 保留字符必须转义（路径含 & 时 plist 才能被 launchd 解析）。
+	got = launchdPlistContent("/opt/a&b/adapter", "/data", nil)
+	if !strings.Contains(got, "<string>/opt/a&amp;b/adapter</string>") {
+		t.Fatalf("xml chars not escaped:\n%s", got)
 	}
 }

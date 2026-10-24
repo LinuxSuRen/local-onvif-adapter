@@ -118,6 +118,8 @@ func opGetScopes(s *Service, _ []byte) (string, error) {
 		"onvif://www.onvif.org/Profile/Streaming",
 		"onvif://www.onvif.org/name/" + root.Model,
 		"onvif://www.onvif.org/hardware/" + root.Model,
+		// 厂商能力宣告：支持 lns: 按需直推（controller 据此免探测选择直推模式）
+		"onvif://www.linuxsuren.com/feature/push-stream",
 	}
 	body := `<tds:GetScopesResponse>`
 	for _, sc := range scopes {

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,8 +30,14 @@ type Status struct {
 type Runner struct {
 	cam      config.Camera
 	pushAddr string
+	targets  []string // 按需直推目标（tee 子输出），纳入 spec 指纹
 	bin      string
 	logger   *slog.Logger
+
+	// onStart/onExit 由 Manager 注入：进程成功启动/意外退出时回报，
+	// 用于推流会话状态迁移与失败预算（正常 Stop 不触发 onExit）。
+	onStart func(camID string)
+	onExit  func(camID string, uptime time.Duration, errMsg string)
 
 	mu      sync.Mutex
 	status  Status
@@ -55,6 +62,15 @@ type Manager struct {
 	rsPipe  *rsPipe
 	rsSpec  rsPipeSpec
 	rsWants bool
+
+	// 按需直推会话（见 push.go）：lastCameras 供会话变化时自行触发 Sync。
+	pushSessions      map[string]*PushSession
+	pushFails         map[string]int // cameraID → 连续短命运行计数（失败预算）
+	lastCameras       []config.Camera
+	pushTTL           time.Duration
+	pushJanitorStop   chan struct{}
+	pushJanitorOnce   sync.Once
+	pushJanitorPeriod time.Duration // janitor 巡检周期（测试可缩短）
 }
 
 // NewManager 创建取流管理器。pushBase 返回推流目标（形如 rtsp://127.0.0.1:8554，
@@ -63,13 +79,20 @@ func NewManager(pushBase func() string, bin string, logger *slog.Logger) *Manage
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{
-		runners:  map[string]*Runner{},
-		pushBase: pushBase,
-		bin:      bin,
-		rsBin:    "rs-pipe",
-		logger:   logger,
+	m := &Manager{
+		runners:           map[string]*Runner{},
+		pushBase:          pushBase,
+		bin:               bin,
+		rsBin:             "rs-pipe",
+		logger:            logger,
+		pushSessions:      map[string]*PushSession{},
+		pushFails:         map[string]int{},
+		pushTTL:           defaultPushTTL,
+		pushJanitorStop:   make(chan struct{}),
+		pushJanitorPeriod: pushJanitorPeriod,
 	}
+	go m.janitorLoop(m.pushJanitorStop)
+	return m
 }
 
 // ConfigureRealsense 设置 rs-pipe 二进制与合成帧模式（Sync 前调用）。
@@ -91,11 +114,28 @@ func Spec(c config.Camera) string {
 		c.AudioEnabled, c.AudioSource)
 }
 
+// specWithPush 在基础指纹上叠加推流目标列表：目标增删即重启进程
+// （ffmpeg 输出列表是命令行参数，无法运行中变更）。内部排序保证顺序无关。
+func specWithPush(c config.Camera, targets []string) string {
+	if len(targets) == 0 {
+		return Spec(c)
+	}
+	sorted := append([]string(nil), targets...)
+	sort.Strings(sorted)
+	return Spec(c) + "|push:" + strings.Join(sorted, ",")
+}
+
 // Sync 将运行态对齐到期望的摄像头列表：
 // 新增的启动、删除/禁用的停止、参数变化的重启。
 func (m *Manager) Sync(cameras []config.Camera) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.syncLocked(cameras)
+}
+
+// syncLocked Sync 的持锁实现（推流会话变化等内部路径复用）。
+func (m *Manager) syncLocked(cameras []config.Camera) {
+	m.lastCameras = cameras
 
 	// 推流地址变化（认证开关切换注入/移除 userinfo）：停掉全部进程，
 	// 按新地址重建，避免旧进程以失效凭证反复 401。
@@ -114,6 +154,12 @@ func (m *Manager) Sync(cameras []config.Camera) {
 			want[c.ID] = c
 		}
 	}
+	// 摄像头被删除/禁用后回收其推流会话（云端视角该源已不存在）。
+	for _, s := range m.pushSessions {
+		if _, ok := want[s.CameraID]; !ok {
+			m.removeSessionLocked(s, "source_gone")
+		}
+	}
 	// 停掉不再需要的。
 	for id, r := range m.runners {
 		if _, ok := want[id]; !ok {
@@ -121,7 +167,7 @@ func (m *Manager) Sync(cameras []config.Camera) {
 			delete(m.runners, id)
 			continue
 		}
-		if r.Spec() != Spec(want[id]) {
+		if r.Spec() != specWithPush(want[id], m.targetsForLocked(id)) {
 			r.Stop()
 			delete(m.runners, id)
 		}
@@ -131,7 +177,10 @@ func (m *Manager) Sync(cameras []config.Camera) {
 		if _, ok := m.runners[id]; ok {
 			continue
 		}
-		r := newRunner(c, m.pushBase(), m.bin, m.logger)
+		targets := m.targetsForLocked(id)
+		r := newRunner(c, m.pushBase(), targets, m.bin, m.logger)
+		r.onStart = m.noteRunStart
+		r.onExit = m.noteRunExit
 		m.runners[id] = r
 		go r.Run()
 	}
@@ -152,7 +201,7 @@ func (m *Manager) Sync(cameras []config.Camera) {
 	}
 }
 
-// StopAll 停止全部进程。
+// StopAll 停止全部进程与推流会话巡检。
 func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -164,6 +213,7 @@ func (m *Manager) StopAll() {
 		m.rsPipe.Stop()
 		m.rsPipe = nil
 	}
+	m.pushJanitorOnce.Do(func() { close(m.pushJanitorStop) })
 }
 
 // Status 返回指定摄像头的取流状态。
@@ -179,14 +229,15 @@ func (m *Manager) Status(camID string) (Status, bool) {
 	return r.status, true
 }
 
-func newRunner(cam config.Camera, pushAddr, bin string, logger *slog.Logger) *Runner {
+func newRunner(cam config.Camera, pushAddr string, targets []string, bin string, logger *slog.Logger) *Runner {
 	return &Runner{
 		cam:      cam,
 		pushAddr: pushAddr,
+		targets:  targets,
 		bin:      bin,
 		logger:   logger,
 		stopCh:   make(chan struct{}),
-		spec:     Spec(cam),
+		spec:     specWithPush(cam, targets),
 	}
 }
 
@@ -224,7 +275,7 @@ func (r *Runner) Run() {
 	const maxBackoff = 15 * time.Second
 	var starts int
 	for !r.isStopped() {
-		args := buildArgs(r.cam, r.pushAddr+r.camPath(), r.bin, r.logger)
+		args := buildArgs(r.cam, r.pushAddr+r.camPath(), r.targets, r.bin, r.logger)
 		cmd := exec.Command(r.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		var stderr tailBuffer
 		cmd.Stderr = &stderr
@@ -307,6 +358,9 @@ func (r *Runner) Run() {
 		onvifserver.PublishEvent("lns:Source/Lifecycle",
 			[]onvifserver.EventItem{{Name: "Camera", Value: r.cam.ID}},
 			[]onvifserver.EventItem{{Name: "Phase", Value: "Started"}, {Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)}})
+		if r.onStart != nil {
+			r.onStart(r.cam.ID)
+		}
 		started := time.Now()
 		err := cmd.Wait()
 		// 进程已结束：摘除句柄，Stop 不再 Kill 已回收的进程
@@ -342,6 +396,14 @@ func (r *Runner) Run() {
 			[]onvifserver.EventItem{{Name: "Phase", Value: "Restarting"},
 				{Name: "Restarts", Value: fmt.Sprintf("%d", starts-1)},
 				{Name: "Error", Value: trimEvent(msg, 120)}})
+		// 长命运行视为成功：退避归零、失败预算清零（onExit 内判定）。
+		uptime := time.Since(started)
+		if uptime >= pushFailWindow {
+			backoff = time.Second
+		}
+		if r.onExit != nil {
+			r.onExit(r.cam.ID, uptime, msg)
+		}
 		select {
 		case <-r.stopCh:
 			return
@@ -603,11 +665,13 @@ func darwinScreenCmd(c config.Camera) string {
 // BuildArgs 构造完整的 ffmpeg 取流推流命令参数（编码器按默认 auto 解析，
 // 仅供测试与兼容旧调用；运行路径请用 buildArgs 传入实际 bin 与 logger）。
 func BuildArgs(c config.Camera, pushURL string) []string {
-	return buildArgs(c, pushURL, "ffmpeg", nil)
+	return buildArgs(c, pushURL, nil, "ffmpeg", nil)
 }
 
 // buildArgs 构造完整的 ffmpeg 取流推流命令参数（含编码器选择与帧率兜底）。
-func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []string {
+// targets 为按需直推目标（可为空）：非空时输出切换为 tee 多路——编码一次，
+// 本地 RTSP 与远端目标各封装一份；任一路失败进程即退出交由 Runner 重启。
+func buildArgs(c config.Camera, pushURL string, targets []string, bin string, logger *slog.Logger) []string {
 	fps := c.FramerateOrDefault()
 	gov := fps * 2
 	if gov < 10 {
@@ -623,11 +687,8 @@ func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []stri
 		// rpicam-vid 已在采集侧完成硬件 H264 编码（分辨率/帧率/码率由
 		// libcamera 强制执行，不存在驱动静默回退），ffmpeg 仅直通封装：
 		// 零转码，CPU 几乎无开销；帧率/分辨率兜底不适用（copy 不能过滤）。
-		args = append(args, "-c", "copy", "-an",
-			"-f", "rtsp",
-			"-rtsp_transport", "tcp",
-			pushURL,
-		)
+		args = append(args, "-c", "copy", "-an")
+		args = append(args, outputArgs(pushURL, targets)...)
 		return args
 	}
 	// 屏幕采集未配置分辨率时统一缩放到 1280 宽：
@@ -642,18 +703,14 @@ func buildArgs(c config.Camera, pushURL, bin string, logger *slog.Logger) []stri
 	args = append(args, audioEncodeArgs(c)...)
 	args = append(args, fpsGuaranteeArgs(c)...)
 	args = append(args, resolutionGuaranteeArgs(c)...)
-	args = append(args,
-		"-f", "rtsp",
-		"-rtsp_transport", "tcp",
-		pushURL,
-	)
+	args = append(args, outputArgs(pushURL, targets)...)
 	return args
 }
 
 // rpicamVidArgs 构造 rpicam-vid 命令参数（libcamera 管线采集 CSI 摄像头，
 // 硬件 H264 编码后写 stdout，由 runner 接到 ffmpeg 的 stdin）。
 //   - --inline：SPS/PPS 随每个关键帧内联重发——RTSP 读者中途加入也能解码
-//    （这正是 ffmpeg 直调 v4l2m2m 翻车缺的特性，见 encoder.go 实测说明）；
+//     （这正是 ffmpeg 直调 v4l2m2m 翻车缺的特性，见 encoder.go 实测说明）；
 //   - 分辨率/帧率/码率由 libcamera 强制执行，不存在 v4l2 的静默回退；
 //   - --intra：关键帧周期与软编码 gov 约定一致（2×帧率），控制读者接入延迟。
 func rpicamVidArgs(c config.Camera) []string {

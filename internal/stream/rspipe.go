@@ -108,7 +108,7 @@ func (p *rsPipe) Run() {
 		args := rsPipeArgs(p.spec, p.fake)
 		cmd := exec.Command(p.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		p.logger.Info("rs-pipe starting", "bin", p.bin, "args", args)
-		cmd.Stderr = os.Stderr              // rs-pipe 日志直接透传（量小，便于排障）
+		cmd.Stderr = os.Stderr // rs-pipe 日志直接透传（量小，便于排障）
 		if err := cmd.Start(); err != nil {
 			p.logger.Warn("rs-pipe start failed", "err", err.Error(),
 				"hint", "请安装/编译 rs-pipe（go build ./cmd/rs-pipe）并确保 realsense_bin 可寻址")
