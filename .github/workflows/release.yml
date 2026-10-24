@@ -77,8 +77,14 @@ jobs:
             else
               unset GOARM
             fi
+            # Windows 二进制带 .exe 后缀，解压即可直接运行；
+            # 其余平台不带后缀。
+            BIN="local-onvif-adapter"
+            if [ "${GOOS}" = "windows" ]; then
+              BIN="local-onvif-adapter.exe"
+            fi
             CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
-              go build -trimpath -ldflags "${LDFLAGS}" -o "dist/${NAME}/local-onvif-adapter" .
+              go build -trimpath -ldflags "${LDFLAGS}" -o "dist/${NAME}/${BIN}" .
             unset GOARM
             cp LICENSE README.md "dist/${NAME}/"
             if [ "${GOOS}" = "windows" ]; then
