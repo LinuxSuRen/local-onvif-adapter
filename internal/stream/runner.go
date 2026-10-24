@@ -275,6 +275,13 @@ func (r *Runner) Run() {
 	const maxBackoff = 15 * time.Second
 	var starts int
 	for !r.isStopped() {
+		// 屏幕源预检（仅显示器矩形源会被拦截）：拓扑变化时挂起等待，
+		// 避免 ffmpeg 秒退重启风暴；恢复后立即续采。见 awaitScreenSource。
+		if r.cam.Type == config.TypeScreen {
+			if !r.awaitScreenSource() {
+				return
+			}
+		}
 		args := buildArgs(r.cam, r.pushAddr+r.camPath(), r.targets, r.bin, r.logger)
 		cmd := exec.Command(r.bin, args...) //nolint:gosec // 二进制路径来自受控配置
 		var stderr tailBuffer
@@ -575,6 +582,44 @@ func screenInputArgs(c config.Camera) []string {
 // monitorRectRe 匹配 Windows 显示器矩形 source："desktop@X,Y,WxH"
 // （X/Y 为虚拟桌面坐标，可为负；W/H 为该显示器尺寸）。
 var monitorRectRe = regexp.MustCompile(`^desktop@(-?\d+),(-?\d+),(\d+)x(\d+)$`)
+
+// rectWithin 纯函数：矩形 (x,y,w,h) 是否完整落在 (vx,vy,vw,vh) 内（含边界）。
+// 供屏幕源预检判断采集区域是否越出当前虚拟桌面。
+func rectWithin(x, y, w, h, vx, vy, vw, vh int32) bool {
+	return x >= vx && y >= vy && x+w <= vx+vw && y+h <= vy+vh
+}
+
+// screenWaitPoll 屏幕源挂起等待期的显示拓扑轮询周期（测试可缩短）。
+// 选轮询而非 WM_DISPLAYCHANGE 消息窗口：仅挂起中的摄像头才轮询，开销可忽略，
+// 实现简单且无需在 Go 里维护 win32 消息循环。
+var screenWaitPoll = 2 * time.Second
+
+// awaitScreenSource 屏幕源启动预检：配置的显示器矩形不在当前虚拟桌面内时
+// （拓扑变化：RDP 接管、扩展坞/显示器断开、开机自启早于布局就绪）不启动
+// ffmpeg——否则 gdigrab 打开输入即失败，监督循环秒退形成重启风暴与日志刷屏。
+// 挂起期间每 screenWaitPoll 复查一次，显示器恢复后立即续采；状态写入
+// LastError 供 UI 展示等待原因。返回 false 表示等待期间收到停止请求。
+func (r *Runner) awaitScreenSource() bool {
+	reason, blocked := screenSourceBlocked(r.cam)
+	if !blocked {
+		return true
+	}
+	r.logger.Warn("screen source outside current virtual desktop, suspended until display recovery",
+		"camera", r.cam.ID, "reason", reason)
+	// starts 传 nil：挂起态不推进启动计数，恢复后仍按原退避语义计。
+	r.setRunning(false, "等待显示恢复："+reason, nil)
+	for {
+		select {
+		case <-r.stopCh:
+			return false
+		case <-time.After(screenWaitPoll):
+		}
+		if reason, blocked = screenSourceBlocked(r.cam); !blocked {
+			r.logger.Info("screen source back inside virtual desktop, resuming", "camera", r.cam.ID)
+			return true
+		}
+	}
+}
 
 // x11ScreenRectRe 匹配 Linux 显示器 source：":0.0+X,Y@WxH"
 // （x11grab 原生支持 display 偏移 +X,Y；@WxH 为本程序附加的期望尺寸）。
