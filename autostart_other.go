@@ -1,19 +1,16 @@
-//go:build !windows
+//go:build !windows && !linux && !darwin
 
 package main
 
 import "errors"
 
-// 非 Windows 平台暂未实现 install/uninstall 子命令；
-// Linux（systemd 用户单元）与 macOS（launchd）的手动配置见 README「开机自启」。
-func registerAutostart(string) error {
+// 其余平台（BSD 等）暂未实现 install/uninstall 子命令；参考 README「开机自启」手动配置。
+func autostartSupported() bool { return false }
+
+func installAutostart(exe, dataDir string, extraArgs []string, dryRun bool) error {
 	return errors.New("install is not implemented on this platform yet, see README for manual setup")
 }
 
-func unregisterAutostart() error {
+func uninstallAutostart(dataDir string) error {
 	return errors.New("uninstall is not implemented on this platform yet")
 }
-
-func autostartRegistered() (string, bool) { return "", false }
-
-func autostartSupported() bool { return false }

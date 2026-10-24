@@ -1,9 +1,31 @@
+# local-onvif-adapter 容器编排——按宿主机平台选择网络模式：
+#
+# 1) host 模式（默认服务）：
+#      docker compose up -d --build          # 或 make up
+#    Linux 宿主机首选（WS-Discovery 组播、RTSP、USB 摄像头全部可用）；
+#    Docker Desktop 需 >= 4.34 且在 Settings → Resources → Network
+#    开启 Host networking（组播发现仍不保证可用，客户端可手填接入地址兜底）。
+#
+# 2) bridge 模式（显式点名服务即启用，Windows / macOS 默认安装下的推荐方式，全平台通用）：
+#      ADVERTISE_IP=<宿主机局域网IP> docker compose up -d --build local-onvif-adapter-bridge
+#    ADVERTISE_IP 必填：桥接网络下自动探测会得到容器内网 IP（172.x），
+#    GetStreamUri/快照/XAddr 宣告的地址客户端将无法访问。
+#    WS-Discovery 组播无法穿越 bridge，ONVIF 客户端需手填接入地址。
+#
+# 本地 USB 摄像头只有 Linux 宿主机能映射进容器（/dev/video*）；Windows/macOS
+# 宿主机摄像头无法透传给容器（容器跑在 Docker Desktop 的 Linux VM 里），
+# 请在容器内使用 rtsp/testsrc 源，采集本机摄像头请改用原生二进制运行。
+
 services:
   local-onvif-adapter:
     build:
       context: .
       args:
         VERSION: ${VERSION:-dev}
+        # 网络受限环境（如国内）可覆盖：GOPROXY=https://goproxy.cn,direct
+        # NPM_REGISTRY=https://registry.npmmirror.com
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: local-onvif-adapter:latest
     container_name: local-onvif-adapter
     network_mode: host
@@ -15,3 +37,33 @@ services:
       # Linux 下接入本地 USB 摄像头（按需取消注释，可映射多个）：
       # - /dev/video0:/dev/video0
       # - /dev/video1:/dev/video1
+
+  # Windows / macOS Docker Desktop 用 bridge 模式（Linux 也通用）：
+  #   ADVERTISE_IP=192.168.1.10 docker compose up -d --build local-onvif-adapter-bridge
+  # （显式点名服务即可，无需 --profile；注意不要与 host 模式同时运行）
+  local-onvif-adapter-bridge:
+    profiles: ["bridge"]
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    image: local-onvif-adapter:latest
+    container_name: local-onvif-adapter-bridge
+    restart: unless-stopped
+    environment:
+      # 对外宣告 IP = 宿主机局域网 IP（每次启动以此为准写回配置，IP 变了改这里重启即可）
+      ADVERTISE_IP: ${ADVERTISE_IP:-}
+    command:
+      - --data-dir=/data
+    ports:
+      - "8080:8080" # 管理 UI / REST API / ONVIF SOAP
+      - "8554:8554" # RTSP（TCP interleaved，推荐）
+      # RTSP over UDP（ffmpeg 默认先试 UDP）。不映射时客户端用 TCP 拉流即可：
+      #   ffplay -rtsp_transport tcp rtsp://<宿主机IP>:8554/cam/<摄像头ID>
+      # - "8000-8001:8000-8001/udp"
+    volumes:
+      - ./data:/data
+      # Linux 下接入本地 USB 摄像头（按需取消注释）：
+      # - /dev/video0:/dev/video0
