@@ -401,25 +401,83 @@ func opSetVideoEncoderConfiguration(s *Service, inner []byte) (string, error) {
 	return `<trt:SetVideoEncoderConfigurationResponse/>`, nil
 }
 
+// encoderModesFallback 是无法探测传感器真实能力时的静态候选列表（历史行为）。
+var encoderModesFallback = []ResolutionOption{
+	{Width: 1920, Height: 1080, MaxFPS: 30},
+	{Width: 1280, Height: 720, MaxFPS: 30},
+	{Width: 640, Height: 480, MaxFPS: 30},
+}
+
+// encoderModesOf 返回该摄像头可选的分辨率模式：配置了探测器时用传感器
+// 真实模式（probed=true），否则回退静态列表，行为与历史版本一致。
+func (s *Service) encoderModesOf(c config.Camera) (modes []ResolutionOption, probed bool) {
+	if s.EncoderResolutions != nil {
+		if m := s.EncoderResolutions(c); len(m) > 0 {
+			return m, true
+		}
+	}
+	return encoderModesFallback, false
+}
+
+// dedupeResolutions 按 WxH 去重并保持原顺序（当前生效分辨率置顶时避免重复项）。
+func dedupeResolutions(list []ResolutionOption) []ResolutionOption {
+	out := make([]ResolutionOption, 0, len(list))
+	seen := make(map[[2]int]bool, len(list))
+	for _, m := range list {
+		key := [2]int{m.Width, m.Height}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	return out
+}
+
 func opGetEncoderOptions(s *Service, v CameraView) (string, error) {
 	w, h := resolutionOf(v.Camera)
+	modes, probed := s.encoderModesOf(v.Camera)
+	maxFPS := 0
+	for _, m := range modes {
+		if m.MaxFPS > maxFPS {
+			maxFPS = m.MaxFPS
+		}
+	}
+	if maxFPS <= 0 {
+		maxFPS = 30
+	}
 	res := func(w, h int) string {
 		return fmt.Sprintf(`<tt:ResolutionsAvailable><tt:Width>%d</tt:Width><tt:Height>%d</tt:Height></tt:ResolutionsAvailable>`, w, h)
 	}
+	listXML := ""
+	for _, m := range modes {
+		listXML += res(m.Width, m.Height)
+	}
+	// 顶层列表以当前生效分辨率置顶，再跟全部候选（去重），保证客户端
+	// 按"当前值 + 可选值"两段语义都能取到。
+	topXML := ""
+	for _, m := range dedupeResolutions(append([]ResolutionOption{{Width: w, Height: h}}, modes...)) {
+		topXML += res(m.Width, m.Height)
+	}
+	// 帧率上限：探测到真实模式时取传感器能力；回退静态列表时保持历史值
+	//（JPEG 段跟随配置帧率，H264 段固定 30）。
+	jpegFPSMax, h264FPSMax := v.Camera.FramerateOrDefault(), 30
+	if probed {
+		jpegFPSMax, h264FPSMax = maxFPS, maxFPS
+	}
 	body := `<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>` +
 		`<tt:QualityRange><tt:Min>1</tt:Min><tt:Max>10</tt:Max></tt:QualityRange>` +
-		res(w, h) + res(1920, 1080) + res(1280, 720) + res(640, 480) +
-		`<tt:JpegOptions>` + res(1920, 1080) + res(1280, 720) + res(640, 480) +
-		fmt.Sprintf(`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange>`, v.Camera.FramerateOrDefault()) +
-		`</tt:JpegOptions>` +
-		`<tt:Mpeg4Options/>` +
-		`<tt:H264Options>` + res(1920, 1080) + res(1280, 720) + res(640, 480) +
+		topXML +
+		`<tt:JPEG>` + listXML +
+		fmt.Sprintf(`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange>`, jpegFPSMax) +
+		`</tt:JPEG>` +
+		`<tt:H264>` + listXML +
 		`<tt:GovLengthRange><tt:Min>1</tt:Min><tt:Max>120</tt:Max></tt:GovLengthRange>` +
-		`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>30</tt:Max></tt:FrameRateRange>` +
-		`<tt:EncodingProfiles>Baseline</tt:EncodingProfiles>` +
-		`<tt:EncodingProfiles>Main</tt:EncodingProfiles>` +
-		`<tt:EncodingProfiles>High</tt:EncodingProfiles>` +
-		`</tt:H264Options>` +
+		fmt.Sprintf(`<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>%d</tt:Max></tt:FrameRateRange>`, h264FPSMax) +
+		`<tt:H264ProfilesSupported>Baseline</tt:H264ProfilesSupported>` +
+		`<tt:H264ProfilesSupported>Main</tt:H264ProfilesSupported>` +
+		`<tt:H264ProfilesSupported>High</tt:H264ProfilesSupported>` +
+		`</tt:H264>` +
 		`</trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>`
 	return body, nil
 }
