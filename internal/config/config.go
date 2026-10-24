@@ -22,12 +22,13 @@ const (
 	TypeRTSP         CameraType = "rtsp"         // 拉取已有网络摄像头的 RTSP 流
 	TypeTestSrc      CameraType = "testsrc"      // ffmpeg 测试彩条，无需真实摄像头
 	TypeRpicam       CameraType = "rpicam"       // 树莓派 CSI 摄像头（rpicam-vid/libcamera 管线，硬件编码零转码）
+	TypeRealSense    CameraType = "realsense"    // RealSense 深度相机一路流（rs-pipe 分发的 rawvideo TCP 流）
 )
 
 // Valid 校验来源类型是否合法。
 func (t CameraType) Valid() bool {
 	switch t {
-	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam:
+	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam, TypeRealSense:
 		return true
 	default:
 		return false
@@ -86,7 +87,12 @@ type Server struct {
 	RTSPPort     int    `json:"rtsp_port"`      // RTSP 端口：内嵌服务器监听端口 + 对外宣告端口
 	RTSPEmbedded bool   `json:"rtsp_embedded"`  // 是否启用内嵌 RTSP 服务器（默认 true）
 	FFmpegBin    string `json:"ffmpeg_bin"`
-	Discovery    bool   `json:"discovery"` // 是否开启 WS-Discovery
+	// RealSense 采集分发器（cmd/rs-pipe）：设备独占语义下由它统一取齐
+	// RGB/深度/IR 三路再经 rawvideo TCP 分发，ffmpeg 各路分别读取。
+	// Fake 为真时 rs-pipe 以合成帧运行（无硬件的离线链路验证）。
+	RealsenseBin  string `json:"realsense_bin"`  // 默认 rs-pipe（PATH 或同目录）
+	RealsenseFake bool   `json:"realsense_fake"` // 合成帧模式
+	Discovery     bool   `json:"discovery"`      // 是否开启 WS-Discovery
 	// 设备面认证（ONVIF SOAP + RTSP），管理台/API 不设防；单一账号。
 	// 口令明文存配置文件：RTSP Digest 与 WS-PasswordDigest 的服务端
 	// 校验都要求明文参与哈希，无法只存摘要。
@@ -124,6 +130,7 @@ func Default() *Root {
 			RTSPPort:     8554,
 			RTSPEmbedded: true, // 与 -rtsp-server 命令行默认值一致；此前缺省 false 与注释"默认 true"不符
 			FFmpegBin:    "ffmpeg",
+			RealsenseBin: "rs-pipe",
 			Discovery:    true,
 		},
 		Manufacturer: "linuxsuren",
@@ -186,6 +193,9 @@ func (r *Root) normalize() {
 	}
 	if r.Server.FFmpegBin == "" {
 		r.Server.FFmpegBin = d.Server.FFmpegBin
+	}
+	if r.Server.RealsenseBin == "" {
+		r.Server.RealsenseBin = d.Server.RealsenseBin
 	}
 	if r.Manufacturer == "" {
 		r.Manufacturer = d.Manufacturer

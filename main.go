@@ -163,6 +163,7 @@ func main() {
 
 	ptzReg := ptzmock.NewRegistry()
 	streams := stream.NewManager(func() string { return withCreds(pushBase) }, root.Server.FFmpegBin, logger)
+	streams.ConfigureRealsense(root.Server.RealsenseBin, root.Server.RealsenseFake)
 	snaps := snapshot.New(root.Server.FFmpegBin, logger)
 	onvifSvc := onvifserver.NewService(store, ptzReg, uris, logger)
 	// 按需直推：lns:StartPushStream 等扩展动作由取流管理器承接
