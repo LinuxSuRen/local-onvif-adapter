@@ -432,13 +432,22 @@ async function finishEdit() {
         <el-select
           v-model="selectedId"
           placeholder="选择布局"
-          style="width: 200px"
+          style="width: 180px"
           :disabled="editing"
         >
           <el-option v-for="m in mosaics" :key="m.id" :value="m.id" :label="m.name" />
         </el-select>
         <el-button type="primary" @click="createVisible = true">
           <el-icon><Plus /></el-icon>新建布局
+        </el-button>
+        <el-button v-if="!editing" type="primary" plain @click="enterEdit">
+          <el-icon><Edit /></el-icon>编辑布局
+        </el-button>
+        <el-button v-if="editing" type="primary" @click="finishEdit">
+          <el-icon><Check /></el-icon>完成
+        </el-button>
+        <el-button v-if="!editing" type="danger" plain @click="handleRemove">
+          <el-icon><Delete /></el-icon>删除
         </el-button>
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>刷新
@@ -495,25 +504,39 @@ async function finishEdit() {
           </template>
         </div>
         <div v-if="editing && draft && !draft.cells.length" class="mo-hint">
-          从下方选择摄像头加入画布
+          点击「添加画面」选择摄像头加入画布
+        </div>
+        <div v-else-if="!editing && current && !current.cells.length" class="mo-hint">
+          画布为空，点击右上角「编辑布局」添加摄像头画面
         </div>
       </div>
 
       <!-- 编辑工具条 -->
       <div v-if="editing && draft" class="mo-editbar">
-        <el-select
-          :model-value="''"
-          placeholder="添加画面到画布"
-          style="width: 220px"
-          @change="(v) => addCell(v)"
-        >
-          <el-option v-for="o in cameraOptions" :key="o.value" :value="o.value" :label="o.label" />
-        </el-select>
+        <el-dropdown trigger="click" @command="(v) => addCell(v)">
+          <el-button type="primary">
+            <el-icon><Plus /></el-icon>添加画面<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="o in cameraOptions"
+                :key="o.value"
+                :command="o.value"
+                :disabled="!o.value"
+              >
+                {{ o.label }}
+              </el-dropdown-item>
+              <el-dropdown-item v-if="!cameraOptions.length" disabled>
+                暂无可用摄像头，请先在摄像头列表添加
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button v-if="selectedCell >= 0 && draft.cells[selectedCell]" @click="removeCell(selectedCell)">
-          <el-icon><Delete /></el-icon>删除第 {{ selectedCell + 1 }} 格
+          <el-icon><Delete /></el-icon>删除选中格
         </el-button>
-        <span class="mo-meta-hint">拖动移动位置，拖角缩放；改动自动保存（{{ dirty ? '待保存' : '已保存' }}）</span>
-        <el-button type="primary" @click="finishEdit">完成</el-button>
+        <span class="mo-meta-hint">点击画面格选中；拖动移动位置，拖角缩放；改动自动保存（{{ dirty ? '待保存' : '已保存' }}）</span>
       </div>
 
       <!-- 布局参数（二次编辑：创建后仍可调整全部参数） -->
@@ -551,8 +574,9 @@ async function finishEdit() {
         </el-form>
       </div>
 
-      <!-- 选中格参数（像素级微调） -->
+      <!-- 选中格参数（摄像头与位置微调） -->
       <div v-if="editing && draft && selectedCell >= 0 && draft.cells[selectedCell]" class="mo-cellform">
+        <span class="mo-cellform-title">画面格 {{ selectedCell + 1 }}</span>
         <el-select
           v-model="draft.cells[selectedCell].camera_id"
           style="width: 180px"
@@ -603,12 +627,6 @@ async function finishEdit() {
         <div>
           <el-button link type="primary" :disabled="!status || !status.stream_url" @click="copyStream">
             <el-icon><Link /></el-icon>复制 RTSP
-          </el-button>
-          <el-button v-if="!editing" link type="primary" @click="enterEdit">
-            <el-icon><Edit /></el-icon>编辑布局
-          </el-button>
-          <el-button v-if="!editing" link type="danger" @click="handleRemove">
-            <el-icon><Delete /></el-icon>删除
           </el-button>
         </div>
       </div>
@@ -721,6 +739,9 @@ async function finishEdit() {
   cursor: move;
   border-color: rgba(64, 158, 255, 0.6);
 }
+.mo-cell--editing:hover {
+  border-color: #409eff;
+}
 .mo-cell--selected {
   border: 1px solid #409eff;
   box-shadow: 0 0 0 1px #409eff inset;
@@ -807,6 +828,11 @@ async function finishEdit() {
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
+}
+.mo-cellform-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #606266;
 }
 .mo-statusbar {
   display: flex;
