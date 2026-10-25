@@ -458,6 +458,17 @@ async function finishEdit() {
     <el-empty v-if="!current" description="还没有融合布局，新建后把多个画面拖进画布合成一路流" />
 
     <template v-else>
+      <!-- 无画面源引导：空布局的合成流是纯黑画面，先加摄像头再编辑布局 -->
+      <el-alert
+        v-if="!cameraOptions.length"
+        class="mo-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="还没有可用作画面源的摄像头"
+        description="融合布局把多路摄像头的画面拼成一路流；没有画面格时输出纯黑画面。请先在上方「摄像头列表」添加摄像头（本地设备 / RTSP 拉流 / 测试彩条），再回到这里编辑布局添加画面。"
+      />
+
       <!-- 画布 -->
       <div
         ref="canvasRef"
@@ -713,6 +724,9 @@ async function finishEdit() {
 }
 .card-title {
   font-weight: 600;
+}
+.mo-alert {
+  margin-bottom: 12px;
 }
 .mo-canvas {
   position: relative;
