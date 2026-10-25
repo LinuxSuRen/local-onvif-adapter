@@ -298,6 +298,11 @@ func (r *Root) normalize() {
 	if r.Mosaics == nil {
 		r.Mosaics = []Mosaic{}
 	}
+	for i := range r.Mosaics {
+		if r.Mosaics[i].Cells == nil {
+			r.Mosaics[i].Cells = []MosaicCell{}
+		}
+	}
 }
 
 // Root 返回当前配置的深拷贝快照。
@@ -347,7 +352,11 @@ func (r *Root) clone() Root {
 	out.Mosaics = make([]Mosaic, len(r.Mosaics))
 	for i, m := range r.Mosaics {
 		out.Mosaics[i] = m
-		out.Mosaics[i].Cells = append([]MosaicCell(nil), m.Cells...)
+		// 显式 make+copy：append([]MosaicCell(nil), 空...) 会得到 nil，
+		// 序列化成 cells:null——前端 current.cells.length 直接抛 TypeError
+		// 把整个融合布局面板炸掉（实测踩坑）。空列表必须保持空列表。
+		out.Mosaics[i].Cells = make([]MosaicCell, len(m.Cells))
+		copy(out.Mosaics[i].Cells, m.Cells)
 	}
 	return out
 }

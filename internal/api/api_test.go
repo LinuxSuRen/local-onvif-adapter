@@ -440,6 +440,33 @@ func TestMosaicCRUD(t *testing.T) {
 	}
 }
 
+// 无画面格的布局 cells 必须序列化为 [] 而不是 null：
+// 前端模板直接读 cells.length，null 会抛 TypeError 炸掉整个面板（实测踩坑）。
+func TestMosaicEmptyCellsNotNull(t *testing.T) {
+	_, ts := newTestServer(t)
+	code, out := doJSON(t, "POST", ts.URL+"/api/mosaics", `{"name":"空格","width":640,"height":480}`)
+	if code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	created := out["data"].(map[string]any)
+	cells, ok := created["cells"].([]any)
+	if !ok {
+		t.Fatalf("cells 应为空数组而非 null: %v", created["cells"])
+	}
+	if len(cells) != 0 {
+		t.Fatalf("cells 应为空: %v", cells)
+	}
+	// 列表接口同样不得返回 null。
+	code, out = doJSON(t, "GET", ts.URL+"/api/mosaics", "")
+	if code != 200 {
+		t.Fatalf("list: %d", code)
+	}
+	list := out["data"].([]any)
+	if _, ok := list[0].(map[string]any)["cells"].([]any); !ok {
+		t.Fatalf("列表 cells 应为数组: %v", list[0])
+	}
+}
+
 func TestMosaicPushAPI(t *testing.T) {
 	_, ts := newTestServer(t)
 	doJSON(t, "POST", ts.URL+"/api/cameras", `{"name":"t","type":"testsrc","enabled":true}`)

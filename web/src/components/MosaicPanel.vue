@@ -49,6 +49,14 @@ let snapTimer = null
 let saveTimer = null
 
 const current = computed(() => mosaics.value.find((m) => m.id === selectedId.value) || null)
+// 防御：历史数据/异常响应可能给出 cells:null，统一归一为空数组，
+// 否则模板里 .length 会抛 TypeError 把整个面板炸掉。
+const displayCells = computed(() => {
+  if (editing.value && draft.value) {
+    return draft.value.cells || []
+  }
+  return (current.value && current.value.cells) || []
+})
 const status = computed(() => statuses[selectedId.value] || (current.value && current.value.status) || null)
 const cameraOptions = computed(() =>
   cameras.value
@@ -294,9 +302,8 @@ function cellStyle(c) {
 
 // 画面格预览：按当前画布（编辑期取 draft）收集摄像头，逐路后台预载快照。
 function activeCellCameraIds() {
-  const cells = editing.value && draft.value ? draft.value.cells : current.value ? current.value.cells : []
   const ids = new Set()
-  for (const c of cells || []) ids.add(c.camera_id)
+  for (const c of displayCells.value) ids.add(c.camera_id)
   return [...ids]
 }
 
@@ -478,7 +485,7 @@ async function finishEdit() {
         @pointerdown.self="selectedCell = -1"
       >
         <div
-          v-for="(cell, i) in editing && draft ? draft.cells : current.cells"
+          v-for="(cell, i) in displayCells"
           :key="i"
           class="mo-cell"
           :class="{
@@ -514,10 +521,10 @@ async function finishEdit() {
             ></span>
           </template>
         </div>
-        <div v-if="editing && draft && !draft.cells.length" class="mo-hint">
+        <div v-if="editing && draft && !displayCells.length" class="mo-hint">
           点击「添加画面」选择摄像头加入画布
         </div>
-        <div v-else-if="!editing && current && !current.cells.length" class="mo-hint">
+        <div v-else-if="!editing && current && !displayCells.length" class="mo-hint">
           画布为空，点击右上角「编辑布局」添加摄像头画面
         </div>
       </div>
@@ -627,7 +634,7 @@ async function finishEdit() {
           </span>
           <span class="mo-meta-hint">
             {{ current.width }}×{{ current.height }}@{{ current.framerate || 15 }} ·
-            {{ current.cells.length }} 画面格 · {{ lossPolicy() === 'blackframe' ? '黑帧兜底' : '整体重启' }}
+            {{ displayCells.length }} 画面格 · {{ lossPolicy() === 'blackframe' ? '黑帧兜底' : '整体重启' }}
             <template v-if="status && status.restarts"> · 重启 {{ status.restarts }} 次</template>
             <template v-if="status && status.uptime_seconds"> · 已运行 {{ formatUptime(status.uptime_seconds) }}</template>
           </span>
