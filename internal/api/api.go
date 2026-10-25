@@ -31,6 +31,9 @@ type Server struct {
 	version string
 	logger  *slog.Logger
 
+	// Mosaics 融合流管理器（main 注入；nil 时融合布局 API 返回未启用）。
+	Mosaics *stream.MosaicManager
+
 	// RTSPBaseURL 是取流服务基址（如 rtsp://127.0.0.1:8554），
 	// 启用中的摄像头优先从该服务的流抓帧（设备独占问题，见 captureSnapshot）。
 	RTSPBaseURL string
@@ -78,6 +81,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cameras/{id}/ptz", s.handleGetPTZ)
 	mux.HandleFunc("POST /api/cameras/{id}/ptz", s.handlePostPTZ)
 
+	mux.HandleFunc("GET /api/mosaics", s.handleListMosaics)
+	mux.HandleFunc("POST /api/mosaics", s.handleCreateMosaic)
+	mux.HandleFunc("PUT /api/mosaics/{id}", s.handleUpdateMosaic)
+	mux.HandleFunc("DELETE /api/mosaics/{id}", s.handleDeleteMosaic)
+	mux.HandleFunc("POST /api/mosaics/{id}/push", s.handleStartMosaicPush)
+	mux.HandleFunc("DELETE /api/mosaics/{id}/push/{token}", s.handleStopMosaicPush)
+
 	// ONVIF 快照路由由根 mux 直接注册（HandleOnvifSnapshot），
 	// 以获得比 /onvif/ SOAP handler 更高的匹配优先级。
 
@@ -114,6 +124,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
 		"auth_enabled":         root.Server.AuthEnabled,
 		"camera_count":         len(root.Cameras),
 		"profile_count":        enabled,
+		"mosaic_count":         len(root.Mosaics),
 	})
 }
 
@@ -171,9 +182,9 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "save_failed", "保存配置失败")
 		return
 	}
-	// 推流地址携带的 userinfo 随凭证变化，重启取流进程以新地址重推。
-	root := s.store.Root()
-	s.streams.Sync(root.Cameras)
+	// 推流地址携带的 userinfo 随凭证变化，重启取流与融合流进程以新地址重推
+	//（融合流的画面中继同样从本地回环流拉取）。
+	s.syncStreams()
 	s.logger.Info("device auth updated", "enabled", req.Enabled)
 	writeData(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 }
@@ -238,6 +249,16 @@ func (s *Server) cameraResponse(cam config.Camera) cameraResp {
 			st.UptimeSeconds = int64(time.Since(run.StartedAt).Seconds())
 		}
 	}
+	// 融合布局虚拟通道：运行状态来自融合流管理器（取流管理器不接管该类型）。
+	if cam.Type == config.TypeMosaic && s.Mosaics != nil {
+		if run, ok := s.Mosaics.Status(cam.ID); ok {
+			st.Running = run.Running
+			st.LastError = run.LastError
+			if run.Running && !run.StartedAt.IsZero() {
+				st.UptimeSeconds = int64(time.Since(run.StartedAt).Seconds())
+			}
+		}
+	}
 	resp.Status = st
 	return resp
 }
@@ -272,6 +293,10 @@ func (in *cameraInput) validate() error {
 	t := config.CameraType(in.Type)
 	if !t.Valid() {
 		return badRequest("不支持的摄像头类型：" + in.Type)
+	}
+	// 融合布局虚拟通道由 /api/mosaics 派生维护，不允许经摄像头接口手工创建。
+	if t == config.TypeMosaic {
+		return badRequest("融合布局通道由融合布局页面管理，请使用 /api/mosaics")
 	}
 	if t == config.TypeRTSP && !strings.HasPrefix(in.Source, "rtsp://") {
 		return badRequest("RTSP 源必须以 rtsp:// 开头")
@@ -377,6 +402,9 @@ func (s *Server) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			if root.Cameras[i].ID != id {
 				continue
 			}
+			if root.Cameras[i].Type == config.TypeMosaic {
+				return badRequest("融合布局通道请在融合布局页面编辑")
+			}
 			root.Cameras[i].Name = strings.TrimSpace(in.Name)
 			root.Cameras[i].Type = config.CameraType(in.Type)
 			root.Cameras[i].Source = strings.TrimSpace(in.Source)
@@ -427,6 +455,9 @@ func (s *Server) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	err := s.store.Update(func(root *config.Root) error {
 		for i := range root.Cameras {
 			if root.Cameras[i].ID == id {
+				if root.Cameras[i].Type == config.TypeMosaic {
+					return badRequest("融合布局通道请在融合布局页面删除")
+				}
 				root.Cameras = append(root.Cameras[:i], root.Cameras[i+1:]...)
 				return nil
 			}
@@ -443,10 +474,13 @@ func (s *Server) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, true)
 }
 
-// syncStreams 将取流进程对齐到最新配置。
+// syncStreams 将取流与融合流进程对齐到最新配置。
 func (s *Server) syncStreams() {
 	root := s.store.Root()
 	s.streams.Sync(root.Cameras)
+	if s.Mosaics != nil {
+		s.Mosaics.Sync(root.Mosaics, root.Cameras)
+	}
 }
 
 // handleListDevices 枚举本机视频设备（内置/USB 摄像头，跨平台）。
@@ -644,6 +678,303 @@ func (s *Server) handlePostPTZ(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, s.ptzStatus(cam.ID))
+}
+
+// ---- 融合布局 CRUD ----
+
+// 融合布局数量与画面格上限（多路解码 + 单路编码的资源边界）。
+const (
+	maxMosaics    = 8
+	maxMosaicCell = 16
+)
+
+type mosaicStatusResp struct {
+	Running       bool                     `json:"running"`
+	Restarts      int                      `json:"restarts"`
+	UptimeSeconds int64                    `json:"uptime_seconds"`
+	LastError     string                   `json:"last_error"`
+	StreamURL     string                   `json:"stream_url"`
+	Cells         []stream.MosaicCellStatus `json:"cells,omitempty"`
+	Pushes        []stream.MosaicPushInfo  `json:"pushes,omitempty"`
+}
+
+type mosaicResp struct {
+	config.Mosaic
+	Status *mosaicStatusResp `json:"status"`
+}
+
+func (s *Server) mosaicResponse(m config.Mosaic) mosaicResp {
+	resp := mosaicResp{Mosaic: m}
+	if !m.Enabled {
+		return resp
+	}
+	st := &mosaicStatusResp{StreamURL: s.onvif.URIs().StreamURI(m.ID)}
+	if s.Mosaics != nil {
+		if run, ok := s.Mosaics.Status(m.ID); ok {
+			st.Running = run.Running
+			st.Restarts = run.Restarts
+			st.LastError = run.LastError
+			st.Cells = run.Cells
+			if run.Running && !run.StartedAt.IsZero() {
+				st.UptimeSeconds = int64(time.Since(run.StartedAt).Seconds())
+			}
+		}
+		st.Pushes = s.Mosaics.MosaicPushes(m.ID)
+	}
+	resp.Status = st
+	return resp
+}
+
+func (s *Server) handleListMosaics(w http.ResponseWriter, _ *http.Request) {
+	root := s.store.Root()
+	out := make([]mosaicResp, 0, len(root.Mosaics))
+	for _, m := range root.Mosaics {
+		out = append(out, s.mosaicResponse(m))
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+type mosaicCellInput struct {
+	CameraID string `json:"camera_id"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	W        int    `json:"w"`
+	H        int    `json:"h"`
+}
+
+type mosaicInput struct {
+	Name          string            `json:"name"`
+	Width         *int              `json:"width"`
+	Height        *int              `json:"height"`
+	Framerate     *int              `json:"framerate"`
+	BitrateKBPS   *int              `json:"bitrate_kbps"`
+	LossPolicy    *string           `json:"loss_policy"`
+	Cells         []mosaicCellInput `json:"cells"`
+	AudioCameraID *string           `json:"audio_camera_id"`
+	Enabled       *bool             `json:"enabled"`
+}
+
+// applyMosaicInput 校验并把输入应用到融合布局（校验依赖画布尺寸与摄像头列表，
+// 必须在 store.Update 的事务草稿上执行）。坐标统一向下偶数对齐
+//（yuv420 色度半采样要求），对齐后校验边界与最小格尺寸。
+func applyMosaicInput(m *config.Mosaic, in *mosaicInput, root *config.Root) error {
+	if strings.TrimSpace(in.Name) == "" {
+		return badRequest("名称不能为空")
+	}
+	m.Name = strings.TrimSpace(in.Name)
+
+	w, h := 1920, 1080
+	if in.Width != nil {
+		w = *in.Width
+	}
+	if in.Height != nil {
+		h = *in.Height
+	}
+	if w < 64 || w > 3840 || h < 64 || h > 2160 {
+		return badRequest("画布尺寸范围 64x64 至 3840x2160")
+	}
+	m.Width, m.Height = w&^1, h&^1
+
+	fps := 15
+	if in.Framerate != nil {
+		fps = *in.Framerate
+	}
+	if fps < 1 || fps > 30 {
+		return badRequest("帧率取值范围 1-30")
+	}
+	m.Framerate = fps
+
+	br := 4096
+	if in.BitrateKBPS != nil {
+		br = *in.BitrateKBPS
+	}
+	if br < 256 || br > 8192 {
+		return badRequest("码率取值范围 256-8192 kbps")
+	}
+	m.BitrateKBPS = br
+
+	policy := ""
+	if in.LossPolicy != nil {
+		policy = strings.TrimSpace(*in.LossPolicy)
+	}
+	if !config.ValidLossPolicy(policy) {
+		return badRequest("断流策略仅支持 blackframe 或 restart")
+	}
+	m.LossPolicy = policy
+
+	if in.AudioCameraID != nil {
+		id := strings.TrimSpace(*in.AudioCameraID)
+		if id != "" {
+			cam, ok := root.FindCamera(id)
+			if !ok || cam.Type == config.TypeMosaic {
+				return badRequest("音频源摄像头不存在或不可用：" + id)
+			}
+		}
+		m.AudioCameraID = id
+	}
+
+	if len(in.Cells) > maxMosaicCell {
+		return badRequest("画面格最多 16 个")
+	}
+	cells := make([]config.MosaicCell, 0, len(in.Cells))
+	for i, c := range in.Cells {
+		cam, ok := root.FindCamera(c.CameraID)
+		if !ok || cam.Type == config.TypeMosaic {
+			return badRequest(fmt.Sprintf("第 %d 格的摄像头不存在，融合通道不能嵌套引用", i+1))
+		}
+		x, y, cw, ch := c.X&^1, c.Y&^1, c.W&^1, c.H&^1
+		if cw < 16 || ch < 16 {
+			return badRequest(fmt.Sprintf("第 %d 格尺寸过小，最小 16x16", i+1))
+		}
+		if x < 0 || y < 0 || x+cw > m.Width || y+ch > m.Height {
+			return badRequest(fmt.Sprintf("第 %d 格超出画布范围", i+1))
+		}
+		cells = append(cells, config.MosaicCell{CameraID: c.CameraID, X: x, Y: y, W: cw, H: ch})
+	}
+	m.Cells = cells
+
+	if in.Enabled != nil {
+		m.Enabled = *in.Enabled
+	}
+	return nil
+}
+
+func (s *Server) handleCreateMosaic(w http.ResponseWriter, r *http.Request) {
+	var in mosaicInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	var created config.Mosaic
+	err := s.store.Update(func(root *config.Root) error {
+		if len(root.Mosaics) >= maxMosaics {
+			return badRequest(fmt.Sprintf("最多支持 %d 个融合布局", maxMosaics))
+		}
+		id := fmt.Sprintf("mosaic%d", root.NextID)
+		root.NextID++
+		created = config.Mosaic{ID: id, Enabled: true}
+		if err := applyMosaicInput(&created, &in, root); err != nil {
+			return err
+		}
+		root.Mosaics = append(root.Mosaics, created)
+		// 虚拟通道：ONVIF profile、RTSP 地址、快照全套复用摄像头机制，
+		// 生命周期随融合布局维护（摄像头接口禁止手工改动）。
+		root.Cameras = append(root.Cameras, created.VirtualCamera())
+		return nil
+	})
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.logger.Info("mosaic created", "id", created.ID, "name", created.Name, "cells", len(created.Cells))
+	s.syncStreams()
+	writeData(w, http.StatusOK, s.mosaicResponse(created))
+}
+
+func (s *Server) handleUpdateMosaic(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var in mosaicInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	var updated config.Mosaic
+	err := s.store.Update(func(root *config.Root) error {
+		for i := range root.Mosaics {
+			if root.Mosaics[i].ID != id {
+				continue
+			}
+			if err := applyMosaicInput(&root.Mosaics[i], &in, root); err != nil {
+				return err
+			}
+			updated = root.Mosaics[i]
+			// 同步虚拟通道投影（配置被手工编辑导致缺失时补建）。
+			found := false
+			for j := range root.Cameras {
+				if root.Cameras[j].ID == id {
+					root.Cameras[j] = updated.VirtualCamera()
+					found = true
+					break
+				}
+			}
+			if !found {
+				root.Cameras = append(root.Cameras, updated.VirtualCamera())
+			}
+			return nil
+		}
+		return &apiError{status: http.StatusNotFound, code: "not_found", message: "融合布局不存在"}
+	})
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.logger.Info("mosaic updated", "id", updated.ID, "cells", len(updated.Cells))
+	s.syncStreams()
+	writeData(w, http.StatusOK, s.mosaicResponse(updated))
+}
+
+func (s *Server) handleDeleteMosaic(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.store.Update(func(root *config.Root) error {
+		for i := range root.Mosaics {
+			if root.Mosaics[i].ID != id {
+				continue
+			}
+			root.Mosaics = append(root.Mosaics[:i], root.Mosaics[i+1:]...)
+			for j := range root.Cameras {
+				if root.Cameras[j].ID == id && root.Cameras[j].Type == config.TypeMosaic {
+					root.Cameras = append(root.Cameras[:j], root.Cameras[j+1:]...)
+					break
+				}
+			}
+			return nil
+		}
+		return &apiError{status: http.StatusNotFound, code: "not_found", message: "融合布局不存在"}
+	})
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	if s.Mosaics != nil {
+		s.Mosaics.Forget(id)
+	}
+	s.ptzReg.Remove(id)
+	s.logger.Info("mosaic deleted", "id", id)
+	s.syncStreams()
+	writeData(w, http.StatusOK, true)
+}
+
+// handleStartMosaicPush 创建一路融合流直推会话（rtsp/rtmp/srt 目标）。
+func (s *Server) handleStartMosaicPush(w http.ResponseWriter, r *http.Request) {
+	if s.Mosaics == nil {
+		writeError(w, http.StatusServiceUnavailable, "mosaic_disabled", "融合流管理器未启用")
+		return
+	}
+	var req struct {
+		Target string `json:"target"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	token, _, err := s.Mosaics.StartMosaicPush(r.PathValue("id"), req.Target)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		return
+	}
+	writeData(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (s *Server) handleStopMosaicPush(w http.ResponseWriter, r *http.Request) {
+	if s.Mosaics == nil {
+		writeError(w, http.StatusServiceUnavailable, "mosaic_disabled", "融合流管理器未启用")
+		return
+	}
+	if err := s.Mosaics.StopMosaicPush(r.PathValue("token")); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "推流会话不存在")
+		return
+	}
+	writeData(w, http.StatusOK, true)
 }
 
 // ---- 通用 ----
