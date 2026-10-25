@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCameras,
@@ -29,7 +29,9 @@ const selectedCell = ref(-1)
 
 const canvasRef = ref(null)
 const snapTick = ref(0)
-const imgErr = reactive({})
+// 预览图：快照生成需 2-3 秒（ffmpeg 冷启动 + 等关键帧），直接换 src 会把画面
+// 清空成黑屏——改为后台 Image() 预载，成功后才替换显示，期间保留最后一帧。
+const previewSrcs = reactive({})
 
 const pushTarget = ref('')
 const createVisible = ref(false)
@@ -76,6 +78,7 @@ async function load() {
     for (const m of mosaics.value) {
       statuses[m.id] = m.status || null
     }
+    refreshPreviews()
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -96,10 +99,7 @@ onMounted(() => {
   load()
   loadCameras()
   statusTimer = setInterval(load, 5000)
-  snapTimer = setInterval(() => {
-    snapTick.value++
-    for (const k of Object.keys(imgErr)) delete imgErr[k]
-  }, 3000)
+  snapTimer = setInterval(refreshPreviews, 3000)
 })
 
 onUnmounted(() => {
@@ -117,6 +117,8 @@ function enterEdit() {
   const { status: _s, ...cfg } = current.value
   draft.value = JSON.parse(JSON.stringify(cfg))
   draft.value.cells = draft.value.cells || []
+  // 下拉控件需要显式值（后端空串 = 默认 blackframe）
+  draft.value.loss_policy = draft.value.loss_policy || 'blackframe'
   dirty.value = false
   selectedCell.value = -1
   editing.value = true
@@ -290,8 +292,27 @@ function cellStyle(c) {
   }
 }
 
-function previewSrc(cameraId) {
-  return `/api/cameras/${encodeURIComponent(cameraId)}/snapshot?t=${Date.now()}&k=${snapTick.value}`
+// 画面格预览：按当前画布（编辑期取 draft）收集摄像头，逐路后台预载快照。
+function activeCellCameraIds() {
+  const cells = editing.value && draft.value ? draft.value.cells : current.value ? current.value.cells : []
+  const ids = new Set()
+  for (const c of cells || []) ids.add(c.camera_id)
+  return [...ids]
+}
+
+function refreshPreviews() {
+  for (const id of activeCellCameraIds()) {
+    loadPreview(id)
+  }
+}
+
+function loadPreview(id) {
+  const url = `/api/cameras/${encodeURIComponent(id)}/snapshot?t=${Date.now()}&k=${snapTick.value}`
+  const im = new Image()
+  im.onload = () => {
+    previewSrcs[id] = url
+  }
+  im.src = url
 }
 
 function freshOf(cameraId) {
@@ -392,8 +413,12 @@ async function removePush(token) {
 }
 
 async function finishEdit() {
-  await nextTick()
-  if (dirty.value) await saveNow()
+  if (dirty.value) {
+    await saveNow()
+    // 保存失败（校验不过/网络错误）时停留在编辑态，让用户修正后重试，
+    // 不静默丢弃未保存的布局改动。
+    if (dirty.value) return
+  }
   exitEdit(false)
   await load()
 }
@@ -444,12 +469,12 @@ async function finishEdit() {
           @pointerdown="onCellPointerDown($event, i)"
         >
           <img
-            v-if="!imgErr[cell.camera_id]"
+            v-if="previewSrcs[cell.camera_id]"
             class="mo-preview"
-            :src="previewSrc(cell.camera_id)"
+            :src="previewSrcs[cell.camera_id]"
             alt=""
-            @error="imgErr[cell.camera_id] = true"
           />
+          <div v-else class="mo-preview mo-preview--loading"></div>
           <div class="mo-cell-bar">
             <span class="mo-cell-name">{{ cameraName(cell.camera_id) }}</span>
             <span
@@ -489,6 +514,41 @@ async function finishEdit() {
         </el-button>
         <span class="mo-meta-hint">拖动移动位置，拖角缩放；改动自动保存（{{ dirty ? '待保存' : '已保存' }}）</span>
         <el-button type="primary" @click="finishEdit">完成</el-button>
+      </div>
+
+      <!-- 布局参数（二次编辑：创建后仍可调整全部参数） -->
+      <div v-if="editing && draft" class="mo-settings">
+        <el-form inline size="small">
+          <el-form-item label="名称">
+            <el-input v-model="draft.name" style="width: 140px" @change="scheduleSave()" />
+          </el-form-item>
+          <el-form-item label="帧率">
+            <el-input-number v-model="draft.framerate" :min="1" :max="30" @change="scheduleSave()" />
+          </el-form-item>
+          <el-form-item label="码率（kbps）">
+            <el-input-number v-model="draft.bitrate_kbps" :min="256" :max="8192" :step="64" @change="scheduleSave()" />
+          </el-form-item>
+          <el-form-item label="断流策略">
+            <el-select v-model="draft.loss_policy" style="width: 210px" @change="scheduleSave()">
+              <el-option value="blackframe" label="黑帧兜底（单路断流只黑一格）" />
+              <el-option value="restart" label="整体重启（任一路断流重启合成流）" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="音频源">
+            <el-select
+              v-model="draft.audio_camera_id"
+              clearable
+              placeholder="不携带音频"
+              style="width: 160px"
+              @change="scheduleSave()"
+            >
+              <el-option v-for="o in cameraOptions" :key="o.value" :value="o.value" :label="o.label" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="启用">
+            <el-switch v-model="draft.enabled" @change="scheduleSave()" />
+          </el-form-item>
+        </el-form>
       </div>
 
       <!-- 选中格参数（像素级微调） -->
@@ -674,6 +734,9 @@ async function finishEdit() {
   object-fit: cover;
   pointer-events: none;
 }
+.mo-preview--loading {
+  background: repeating-linear-gradient(45deg, #101014, #101014 12px, #16161c 12px, #16161c 24px);
+}
 .mo-cell-bar {
   position: absolute;
   left: 0;
@@ -731,6 +794,12 @@ async function finishEdit() {
   gap: 12px;
   margin-top: 12px;
   flex-wrap: wrap;
+}
+.mo-settings {
+  margin-top: 12px;
+}
+.mo-settings :deep(.el-form-item) {
+  margin-bottom: 8px;
 }
 .mo-cellform {
   display: flex;

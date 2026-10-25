@@ -547,6 +547,7 @@ func (s *Server) handleOnvifSnapshot(w http.ResponseWriter, r *http.Request) {
 // 启用中的摄像头优先从取流服务拉帧 —— Windows(dshow)/Linux(v4l2) 的采集设备
 // 通常只能被一个进程打开，取流进程持有设备时无法再开第二个 ffmpeg 直连采集；
 // 拉流失败（如进程尚未就绪）再回退直连，禁用的摄像头直接直连。
+// 融合布局虚拟通道没有直连采集源：合成进程未就绪时明确报错，不做无意义的直连。
 func (s *Server) captureSnapshot(cam config.Camera) ([]byte, error) {
 	if cam.Enabled && s.RTSPBaseURL != "" {
 		url := strings.TrimSuffix(s.RTSPBaseURL, "/") + "/cam/" + cam.ID
@@ -557,6 +558,9 @@ func (s *Server) captureSnapshot(cam config.Camera) ([]byte, error) {
 		s.logger.Warn("snapshot from stream failed, fallback to direct capture",
 			"camera", cam.ID, "err", err.Error())
 	}
+	if cam.Type == config.TypeMosaic {
+		return nil, errors.New("融合流尚未就绪，请稍后重试")
+	}
 	return s.snaps.JPEG(cam)
 }
 
@@ -564,8 +568,11 @@ func (s *Server) writeSnapshot(w http.ResponseWriter, _ *http.Request, cam confi
 	data, err := s.captureSnapshot(cam)
 	if err != nil {
 		s.logger.Warn("snapshot failed", "camera", cam.ID, "err", err.Error())
-		writeError(w, http.StatusBadGateway, "snapshot_failed",
-			"抓取画面失败，请检查摄像头源是否可用（ ffmpeg 是否安装、设备是否被占用 ）")
+		msg := "抓取画面失败，请检查摄像头源是否可用（ ffmpeg 是否安装、设备是否被占用 ）"
+		if cam.Type == config.TypeMosaic {
+			msg = "融合流尚未就绪，请稍后重试（合成进程启动中或已停止）"
+		}
+		writeError(w, http.StatusBadGateway, "snapshot_failed", msg)
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
