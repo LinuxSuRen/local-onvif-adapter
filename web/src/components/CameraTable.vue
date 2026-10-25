@@ -16,7 +16,10 @@ const TYPE_META = {
   dshow: { label: '本地摄像头', tag: 'primary' },
   screen: { label: '屏幕采集', tag: 'success' },
   rtsp: { label: 'RTSP 拉流', tag: 'warning' },
-  testsrc: { label: '测试彩条', tag: 'info' }
+  testsrc: { label: '测试彩条', tag: 'info' },
+  rpicam: { label: 'CSI 摄像头', tag: 'info' },
+  realsense: { label: 'RealSense', tag: 'info' },
+  mosaic: { label: '融合布局', tag: 'danger' }
 }
 
 const toggling = reactive({})
@@ -27,6 +30,11 @@ function typeLabel(type) {
 
 function typeTag(type) {
   return (TYPE_META[type] && TYPE_META[type].tag) || 'info'
+}
+
+// 融合布局虚拟通道：由融合布局面板维护生命周期，这里只读展示。
+function isMosaic(row) {
+  return row.type === 'mosaic'
 }
 
 function isRunning(row) {
@@ -131,6 +139,7 @@ async function copyRTSP(row) {
           <el-switch
             :model-value="row.enabled"
             :loading="!!toggling[row.id]"
+            :disabled="isMosaic(row)"
             @change="(v) => onToggleEnabled(row, v)"
           />
         </template>
@@ -162,24 +171,26 @@ async function copyRTSP(row) {
           <el-button link type="primary" @click="emit('snapshot', row)">
             <el-icon><Camera /></el-icon>快照
           </el-button>
-          <el-button link type="primary" @click="emit('ptz', row)">
-            <el-icon><Position /></el-icon>PTZ 试控
-          </el-button>
-          <el-button link type="primary" @click="emit('edit', row)">
-            <el-icon><Edit /></el-icon>编辑
-          </el-button>
-          <el-popconfirm
-            title="确定删除该摄像头？"
-            confirm-button-text="确定"
-            cancel-button-text="取消"
-            @confirm="emit('remove', row)"
-          >
-            <template #reference>
-              <el-button link type="danger">
-                <el-icon><Delete /></el-icon>删除
-              </el-button>
-            </template>
-          </el-popconfirm>
+          <template v-if="!isMosaic(row)">
+            <el-button link type="primary" @click="emit('ptz', row)">
+              <el-icon><Position /></el-icon>PTZ 试控
+            </el-button>
+            <el-button link type="primary" @click="emit('edit', row)">
+              <el-icon><Edit /></el-icon>编辑
+            </el-button>
+            <el-popconfirm
+              title="确定删除该摄像头？"
+              confirm-button-text="确定"
+              cancel-button-text="取消"
+              @confirm="emit('remove', row)"
+            >
+              <template #reference>
+                <el-button link type="danger">
+                  <el-icon><Delete /></el-icon>删除
+                </el-button>
+              </template>
+            </el-popconfirm>
+          </template>
         </template>
       </el-table-column>
       <template #empty>
