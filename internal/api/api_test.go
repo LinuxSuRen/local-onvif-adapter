@@ -281,6 +281,19 @@ func TestUIStaticServed(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("ui status: %d", resp.StatusCode)
 	}
+	// index.html 必须每次回源校验：否则浏览器驻留旧 bundle，升级后页面不更新。
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("index.html cache-control: %q", cc)
+	}
+	// 不存在的资产明确 404（回退成 HTML 会被当 JS 解析导致白屏）。
+	resp2, err := http.Get(ts.URL + "/assets/index-notexist.js")
+	if err != nil {
+		t.Fatalf("get missing asset: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing asset should 404, got %d", resp2.StatusCode)
+	}
 	// 裸克隆时 web/dist 只有占位文件（返回目录列表），构建前端后才是真实 UI；
 	// 这里只保证静态托管路由本身可用，不校验 UI 内容。
 }

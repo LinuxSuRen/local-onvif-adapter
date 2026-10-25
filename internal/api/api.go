@@ -1023,6 +1023,10 @@ func (s *Server) writeAPIError(w http.ResponseWriter, err error) {
 }
 
 // spaHandler 托管前端静态资源；未命中的路径回退到 index.html（SPA 单页）。
+// 缓存策略：index.html 每次回源校验（它引用的带内容哈希的资产文件名会随构建变化），
+// assets/ 长缓存不可变——否则浏览器驻留旧 bundle，服务升级后页面迟迟不更新，
+// 表现为"新版功能不见了"（实测踩坑：融合布局版块在新版中已存在，用户浏览器
+// 仍在跑旧代码）。
 func spaHandler() http.Handler {
 	fileServer := http.FileServerFS(web.Dist())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1031,7 +1035,19 @@ func spaHandler() http.Handler {
 			path = "index.html"
 		}
 		if _, err := fs.Stat(web.Dist(), path); err != nil {
+			// 旧构建的资产已不存在时明确 404（回退成 index.html 会让浏览器
+			// 把 HTML 当 JS 解析，整页白屏）；SPA 路由仍回退 index.html。
+			if strings.HasPrefix(path, "assets/") {
+				http.NotFound(w, r)
+				return
+			}
 			r.URL.Path = "/"
+			path = "index.html"
+		}
+		if strings.HasPrefix(path, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
 		}
 		fileServer.ServeHTTP(w, r)
 	})
