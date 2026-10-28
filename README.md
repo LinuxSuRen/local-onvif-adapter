@@ -244,16 +244,20 @@ CGO_ENABLED=1 go build -tags realsense -o rs-pipe ./cmd/rs-pipe
    Windows 安装包（自带 USB 驱动），默认路径
    `C:\Program Files (x86)\Intel RealSense SDK 2.0`；
    可先用其自带的 RealSense Viewer 确认设备出图正常。
-2. 装 cgo 所需的 gcc（二选一）：MSYS2 的
+2. 装 cgo 所需的 gcc（三选一）：MSYS2 的
    `pacman -S mingw-w64-ucrt-x86_64-gcc`，或 [WinLibs](https://winlibs.com/)
-   解压后加入 PATH。
+    解压后加入 PATH，或 [w64devkit](https://github.com/skeeto/w64devkit)
+    单文件自解压版（实测 gcc 16.2 + SDK 2.59.1 可用）。
 3. 编译（PowerShell，SDK 装在非默认搜索路径，需环境变量补充头文件/库路径）：
 
    ```powershell
    $env:CGO_ENABLED = "1"
-   $env:CGO_CFLAGS = '-IC:\Program Files (x86)\Intel RealSense SDK 2.0\include'
-   $env:CGO_LDFLAGS = '-LC:\Program Files (x86)\Intel RealSense SDK 2.0\lib\x64 -lrealsense2'
-   go build -tags realsense -o rs-pipe.exe .\cmd\rs-pipe
+    # 注意：路径必须用正斜杠且不能含空格（cgo 按空格切分标志，反斜杠/空格都会导致
+    # "could not determine what C.rs2_* refers to"）；默认安装路径的空格用 8.3 短路径
+    # 规避（cmd /c dir /x "C:\Program Files (x86)" 查短名，通常 Intel RealSense SDK 2.0 → INTELR~1.0）：
+    $env:CGO_CFLAGS = '-IC:/PROGRA~2/INTELR~1.0/include'
+    $env:CGO_LDFLAGS = '-LC:/PROGRA~2/INTELR~1.0/lib/x64 -lrealsense2'
+    go build -tags realsense -o rs-pipe.exe .\cmd\rs-pipe
    ```
 
 4. 把 SDK `bin\x64\realsense2.dll` 复制到 `rs-pipe.exe` 同目录（或将该目录
