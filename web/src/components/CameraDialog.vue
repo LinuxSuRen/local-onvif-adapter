@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createCamera, updateCamera, listDevices } from '../api'
+import { createCamera, updateCamera, listDevices, listRealsenseDevices, createRealsenseCameras, updateRealsenseSettings } from '../api'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -38,11 +38,66 @@ const LOCAL_TYPES = ['v4l2', 'avfoundation', 'dshow']
 const MODE_OPTIONS = [
   { value: 'local', label: '本地摄像头' },
   { value: 'screen', label: '屏幕采集' },
+  { value: 'realsense', label: '深度相机' },
   { value: 'rtsp', label: '网络摄像头（RTSP）' },
   { value: 'rpicam', label: '树莓派 CSI 摄像头' },
   { value: 'testsrc', label: '测试彩条' }
 ]
 const mode = ref('local')
+
+// RealSense 深度相机：一键创建三路（彩色/深度伪彩色/红外），rs-pipe 细节全部隐藏。
+const rsDevices = ref([])
+const rsLoading = ref(false)
+const rsBinAvailable = ref(true)
+const rsHint = ref('')
+const rsBinInput = ref('')
+const rsBinSaving = ref(false)
+const RS_GEOMETRY_PRESETS = [
+  { label: '640×480@15', width: 640, height: 480, framerate: 15 },
+  { label: '848×480@30', width: 848, height: 480, framerate: 30 },
+  { label: '1280×720@30', width: 1280, height: 720, framerate: 30 }
+]
+
+async function loadRealsenseDevices(showToast = false) {
+  rsLoading.value = true
+  try {
+    const result = await listRealsenseDevices()
+    rsBinAvailable.value = !!result.bin_available
+    rsDevices.value = Array.isArray(result.devices) ? result.devices : []
+    rsHint.value = result.hint || ''
+    rsBinInput.value = (result.realsense_bin || '').trim()
+  } catch (e) {
+    rsBinAvailable.value = false
+    rsDevices.value = []
+    rsHint.value = e.message
+    if (showToast) ElMessage.warning(e.message)
+  } finally {
+    rsLoading.value = false
+  }
+}
+
+async function saveRsBinAndRetry() {
+  if (!rsBinInput.value.trim()) {
+    ElMessage.warning('请填写采集器路径')
+    return
+  }
+  rsBinSaving.value = true
+  try {
+    await updateRealsenseSettings(rsBinInput.value.trim())
+    ElMessage.success('采集器路径已保存，正在重新检测…')
+    await loadRealsenseDevices()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    rsBinSaving.value = false
+  }
+}
+
+function applyRsGeometry(p) {
+  form.width = p.width
+  form.height = p.height
+  form.framerate = p.framerate
+}
 
 // 本地设备枚举。
 const devices = ref([])
@@ -76,6 +131,9 @@ watch(
   ([visible, m]) => {
     if (visible && (m === 'local' || m === 'screen') && !devicesLoaded) {
       loadDevices()
+    }
+    if (visible && m === 'realsense' && !props.camera) {
+      loadRealsenseDevices()
     }
   }
 )
@@ -131,6 +189,16 @@ watch(mode, (m) => {
   if (m === 'rtsp') form.type = 'rtsp'
   if (m === 'testsrc') form.type = 'testsrc'
   if (m === 'screen') form.type = 'screen'
+  if (m === 'realsense') {
+    form.type = 'realsense'
+    // 深度相机默认几何 640×480@15（三路一致，rs-pipe 统一启用）。
+    if (!form.width && !form.height) {
+      form.width = 640
+      form.height = 480
+      form.framerate = 15
+    }
+    if (!form.name.trim()) form.name = 'RealSense'
+  }
   if (m === 'local' && !form.type) form.type = defaultLocalType.value
   nextTick(() => formRef.value && formRef.value.clearValidate('source'))
 })
@@ -145,7 +213,7 @@ const rules = {
   source: [
     {
       validator: (rule, value, callback) => {
-        if (mode.value === 'testsrc') return callback()
+        if (mode.value === 'testsrc' || mode.value === 'realsense') return callback()
         if (!value || !String(value).trim()) {
           return callback(new Error(mode.value === 'local' || mode.value === 'screen' ? '请选择设备' : '请输入源'))
         }
@@ -194,6 +262,30 @@ async function handleSave() {
   } catch (e) {
     return
   }
+  // 深度相机新建走专用端点：一次创建三路（彩色/深度/红外），rs-pipe 细节由服务端处理。
+  if (mode.value === 'realsense' && !(props.camera && props.camera.id)) {
+    if (!rsBinAvailable.value) {
+      ElMessage.warning('请先配置可用的深度相机采集器（rs-pipe）')
+      return
+    }
+    saving.value = true
+    try {
+      await createRealsenseCameras({
+        name_prefix: form.name.trim(),
+        width: form.width || 640,
+        height: form.height || 480,
+        framerate: form.framerate || 15
+      })
+      ElMessage.success('已创建三路摄像头：彩色 / 深度（伪彩色）/ 红外')
+      emit('saved')
+      show.value = false
+    } catch (e) {
+      ElMessage.error(e.message)
+    } finally {
+      saving.value = false
+    }
+    return
+  }
   // 兜底：本地模式下类型始终跟随设备或平台默认值。
   let type = form.type
   if (mode.value === 'local' || mode.value === 'screen') {
@@ -237,7 +329,7 @@ async function handleSave() {
   <el-dialog v-model="show" :title="camera ? '编辑摄像头' : '添加摄像头'" width="560px">
     <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
       <el-form-item label="名称" prop="name">
-        <el-input v-model="form.name" placeholder="请输入名称" />
+        <el-input v-model="form.name" :placeholder="mode === 'realsense' && !camera ? '名称前缀，将生成 前缀-彩色/深度/红外' : '请输入名称'" />
       </el-form-item>
       <el-form-item label="来源方式">
         <el-radio-group v-model="mode">
@@ -272,12 +364,52 @@ async function handleSave() {
                 : '列表为当前主机检测到的内置与 USB 摄像头' }}
         </div>
       </el-form-item>
-      <el-form-item v-else label="源" prop="source">
+      <el-form-item v-if="mode === 'realsense' && !camera" label="设备">
+        <div class="rs-panel">
+          <template v-if="rsLoading">
+            <div class="form-tip">正在检测深度相机…</div>
+          </template>
+          <template v-else-if="!rsBinAvailable">
+            <el-alert type="warning" :closable="false" show-icon class="rs-alert"
+              title="未检测到深度相机采集器（rs-pipe）"
+              :description="rsHint || '深度相机由 rs-pipe 采集器统一取流；请填写其路径（编译说明见 README）'" />
+            <div class="num-row">
+              <el-input v-model="rsBinInput" class="full-width" placeholder="如 D:\tools\rs-pipe.exe" />
+              <el-button class="enum-refresh" :loading="rsBinSaving" @click="saveRsBinAndRetry">保存并检测</el-button>
+            </div>
+          </template>
+          <template v-else-if="rsDevices.length === 0">
+            <div class="form-tip">
+              采集器可用，但未检测到 RealSense 设备；插入相机后
+              <el-button text type="primary" size="small" @click="loadRealsenseDevices(true)">重新检测</el-button>
+            </div>
+          </template>
+          <template v-else>
+            <div v-for="d in rsDevices" :key="d.serial" class="rs-device">
+              <el-tag type="success" size="small">{{ d.name }}</el-tag>
+              <span class="rs-serial">SN {{ d.serial }}</span>
+            </div>
+            <div class="form-tip">将创建三路摄像头：彩色 / 深度（伪彩色 300–8000mm）/ 红外</div>
+          </template>
+        </div>
+      </el-form-item>
+      <el-form-item v-else-if="mode !== 'local' && mode !== 'screen'" label="源" prop="source">
         <el-input
           v-model="form.source"
           :disabled="mode === 'testsrc'"
           :placeholder="SOURCE_PLACEHOLDER[mode]"
         />
+        <div v-if="mode === 'realsense'" class="form-tip">
+          源为采集器分发地址（彩色/深度/红外各一路），由"深度相机"一键添加自动生成，无需修改
+        </div>
+      </el-form-item>
+      <el-form-item v-if="mode === 'realsense' && !camera" label="常用档位">
+        <div class="num-row">
+          <el-button v-for="p in RS_GEOMETRY_PRESETS" :key="p.label" size="small"
+            :type="form.width === p.width && form.height === p.height && form.framerate === p.framerate ? 'primary' : 'default'"
+            @click="applyRsGeometry(p)">{{ p.label }}</el-button>
+        </div>
+        <div class="form-tip">三路共用同一几何参数（采集器统一启用）；如需自定义可直接改下方分辨率/帧率</div>
       </el-form-item>
       <el-form-item label="分辨率">
         <div class="num-row">
@@ -285,18 +417,18 @@ async function handleSave() {
           <span class="num-sep">×</span>
           <el-input-number v-model="form.height" :min="0" :max="3840" controls-position="right" placeholder="高" />
         </div>
-        <div class="form-tip">宽高为 0 表示自动</div>
+        <div class="form-tip">{{ mode === 'realsense' ? '深度相机建议 0 自动改为常用档位' : '宽高为 0 表示自动' }}</div>
       </el-form-item>
       <el-form-item label="帧率">
         <el-input-number v-model="form.framerate" :min="1" :max="60" />
       </el-form-item>
-      <el-form-item label="码率">
+      <el-form-item v-if="mode !== 'realsense'" label="码率">
         <div class="num-row">
           <el-input-number v-model="form.bitrate_kbps" :min="256" :max="8192" />
           <span class="num-sep">kbps</span>
         </div>
       </el-form-item>
-      <el-form-item label="红外">
+      <el-form-item v-if="mode !== 'realsense'" label="红外">
         <el-switch v-model="form.infrared" />
         <div class="form-tip">标记为红外通道后，ONVIF profile 名称会带 infrared，客户端可自动识别</div>
       </el-form-item>
@@ -364,5 +496,20 @@ async function handleSave() {
 }
 .audio-source {
   margin-left: 8px;
+}
+.rs-panel {
+  width: 100%;
+}
+.rs-alert {
+  margin-bottom: 8px;
+}
+.rs-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rs-serial {
+  font-size: 12px;
+  color: #909399;
 }
 </style>

@@ -83,6 +83,10 @@ func (s *Server) Handler() http.Handler {
 
 	// 本地摄像头设备枚举（跨平台：内置/USB 摄像头）。
 	mux.HandleFunc("GET /api/devices", s.handleListDevices)
+	mux.HandleFunc("GET /api/realsense/devices", s.handleListRealsenseDevices)
+	mux.HandleFunc("GET /api/realsense/settings", s.handleRealsenseSettings)
+	mux.HandleFunc("PUT /api/realsense/settings", s.handleRealsenseSettings)
+	mux.HandleFunc("POST /api/realsense/cameras", s.handleCreateRealsenseCameras)
 
 	// 前端静态资源。
 	staticHandler := spaHandler()
