@@ -23,12 +23,13 @@ const (
 	TypeTestSrc      CameraType = "testsrc"      // ffmpeg 测试彩条，无需真实摄像头
 	TypeRpicam       CameraType = "rpicam"       // 树莓派 CSI 摄像头（rpicam-vid/libcamera 管线，硬件编码零转码）
 	TypeRealSense    CameraType = "realsense"    // RealSense 深度相机一路流（rs-pipe 分发的 rawvideo TCP 流）
+	TypeMosaic       CameraType = "mosaic"       // 融合布局虚拟通道（由 mosaics 配置派生：多路画面合成单路流，不直接取流）
 )
 
 // Valid 校验来源类型是否合法。
 func (t CameraType) Valid() bool {
 	switch t {
-	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam, TypeRealSense:
+	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam, TypeRealSense, TypeMosaic:
 		return true
 	default:
 		return false
@@ -79,6 +80,83 @@ func (c Camera) BitrateOrDefault() int {
 	return c.BitrateKBPS
 }
 
+// 融合布局断流兜底策略。
+const (
+	// LossPolicyBlackframe 每路画面独立中继：单路断流只黑对应格，整流不断。
+	LossPolicyBlackframe = "blackframe"
+	// LossPolicyRestart 单 ffmpeg filter_complex：任一路断流进程退出整体重启，简单但整流会中断数秒。
+	LossPolicyRestart = "restart"
+)
+
+// ValidLossPolicy 校验断流策略（空串视为默认 blackframe）。
+func ValidLossPolicy(p string) bool {
+	return p == "" || p == LossPolicyBlackframe || p == LossPolicyRestart
+}
+
+// MosaicCell 融合布局中的一个画面格：把 CameraID 的画面铺到画布的 (x,y,w,h) 矩形。
+// 坐标为画布绝对像素；cells 数组顺序即叠放顺序（后面的格盖在前面之上）。
+type MosaicCell struct {
+	CameraID string `json:"camera_id"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	W        int    `json:"w"`
+	H        int    `json:"h"`
+}
+
+// Mosaic 一路融合布局：多路摄像头按 cells 拼到画布，合成为单路流输出。
+type Mosaic struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Width       int          `json:"width"`  // 画布宽（像素，偶数）
+	Height      int          `json:"height"` // 画布高（像素，偶数）
+	Framerate   int          `json:"framerate"`
+	BitrateKBPS int          `json:"bitrate_kbps"`
+	LossPolicy  string       `json:"loss_policy"` // blackframe（默认）| restart
+	Cells       []MosaicCell `json:"cells"`
+	// AudioCameraID 可选：合成流携带该摄像头的音轨（单源，不做混音）。
+	AudioCameraID string `json:"audio_camera_id"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// FramerateOrDefault 返回生效帧率。
+func (m Mosaic) FramerateOrDefault() int {
+	if m.Framerate <= 0 {
+		return 15
+	}
+	return m.Framerate
+}
+
+// BitrateOrDefault 返回生效码率（kbps）。
+func (m Mosaic) BitrateOrDefault() int {
+	if m.BitrateKBPS <= 0 {
+		return 4096
+	}
+	return m.BitrateKBPS
+}
+
+// EffectiveLossPolicy 返回生效的断流策略（空串归一为 blackframe）。
+func (m Mosaic) EffectiveLossPolicy() string {
+	if m.LossPolicy == LossPolicyRestart {
+		return LossPolicyRestart
+	}
+	return LossPolicyBlackframe
+}
+
+// VirtualCamera 返回融合布局在摄像头列表中的投影：作为普通通道出现，
+// ONVIF profile、RTSP 拉流地址、快照全套复用；由 mosaics CRUD 维护生命周期。
+func (m Mosaic) VirtualCamera() Camera {
+	return Camera{
+		ID:          m.ID,
+		Name:        m.Name,
+		Type:        TypeMosaic,
+		Width:       m.Width,
+		Height:      m.Height,
+		Framerate:   m.Framerate,
+		BitrateKBPS: m.BitrateKBPS,
+		Enabled:     m.Enabled,
+	}
+}
+
 // Server 服务级配置。
 type Server struct {
 	HTTPAddr     string `json:"http_addr"`      // HTTP 监听地址，默认 :8080
@@ -111,13 +189,14 @@ func (s Server) AuthCreds() (user, pass string, ok bool) {
 
 // Root 配置文件根节点。
 type Root struct {
-	Server       Server   `json:"server"`
-	Manufacturer string   `json:"manufacturer"`
-	Model        string   `json:"model"`
-	Firmware     string   `json:"firmware"`
-	Serial       string   `json:"serial"` // 设备序列号，首次生成后持久化
-	NextID       int      `json:"next_id"`
-	Cameras      []Camera `json:"cameras"`
+	Server       Server    `json:"server"`
+	Manufacturer string    `json:"manufacturer"`
+	Model        string    `json:"model"`
+	Firmware     string    `json:"firmware"`
+	Serial       string    `json:"serial"` // 设备序列号，首次生成后持久化
+	NextID       int       `json:"next_id"`
+	Cameras      []Camera  `json:"cameras"`
+	Mosaics      []Mosaic  `json:"mosaics"`
 }
 
 // Default 返回默认配置。
@@ -138,6 +217,7 @@ func Default() *Root {
 		Firmware:     "0.1.0",
 		NextID:       1,
 		Cameras:      []Camera{},
+		Mosaics:      []Mosaic{},
 	}
 }
 
@@ -215,6 +295,14 @@ func (r *Root) normalize() {
 	if r.Cameras == nil {
 		r.Cameras = []Camera{}
 	}
+	if r.Mosaics == nil {
+		r.Mosaics = []Mosaic{}
+	}
+	for i := range r.Mosaics {
+		if r.Mosaics[i].Cells == nil {
+			r.Mosaics[i].Cells = []MosaicCell{}
+		}
+	}
 }
 
 // Root 返回当前配置的深拷贝快照。
@@ -261,6 +349,15 @@ func persist(r *Root, path string) error {
 func (r *Root) clone() Root {
 	out := *r
 	out.Cameras = append([]Camera(nil), r.Cameras...)
+	out.Mosaics = make([]Mosaic, len(r.Mosaics))
+	for i, m := range r.Mosaics {
+		out.Mosaics[i] = m
+		// 显式 make+copy：append([]MosaicCell(nil), 空...) 会得到 nil，
+		// 序列化成 cells:null——前端 current.cells.length 直接抛 TypeError
+		// 把整个融合布局面板炸掉（实测踩坑）。空列表必须保持空列表。
+		out.Mosaics[i].Cells = make([]MosaicCell, len(m.Cells))
+		copy(out.Mosaics[i].Cells, m.Cells)
+	}
 	return out
 }
 
@@ -272,4 +369,14 @@ func (r Root) FindCamera(id string) (Camera, bool) {
 		}
 	}
 	return Camera{}, false
+}
+
+// FindMosaic 按 ID 查找融合布局。
+func (r Root) FindMosaic(id string) (Mosaic, bool) {
+	for _, m := range r.Mosaics {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return Mosaic{}, false
 }

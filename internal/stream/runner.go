@@ -150,7 +150,9 @@ func (m *Manager) syncLocked(cameras []config.Camera) {
 
 	want := map[string]config.Camera{}
 	for _, c := range cameras {
-		if c.Enabled {
+		// 融合布局虚拟通道不直接取流：合成进程由 MosaicManager 监督
+		//（见 mosaic.go），这里跳过避免两个管理器抢同一路输出。
+		if c.Enabled && c.Type != config.TypeMosaic {
 			want[c.ID] = c
 		}
 	}

@@ -105,3 +105,31 @@ export function updateRtspPort(port) {
 export function updateAuth(enabled, username, password) {
   return request('/api/auth', { method: 'PUT', body: { enabled, username, password } })
 }
+
+// ---- 融合布局 ----
+
+export function getMosaics() {
+  return request('/api/mosaics')
+}
+
+export function createMosaic(mosaic) {
+  return request('/api/mosaics', { method: 'POST', body: mosaic })
+}
+
+export function updateMosaic(id, mosaic) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}`, { method: 'PUT', body: mosaic })
+}
+
+export function deleteMosaic(id) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function startMosaicPush(id, target) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}/push`, { method: 'POST', body: { target } })
+}
+
+export function stopMosaicPush(id, token) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}/push/${encodeURIComponent(token)}`, {
+    method: 'DELETE'
+  })
+}
