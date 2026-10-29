@@ -216,7 +216,7 @@ func (s *rsSource) Poll() (realsense.FrameSet, error) {
 	if f, ok := extractStream(frames, C.RS2_STREAM_DEPTH); ok {
 		if data := C.rs2_get_frame_data(f, &e); rsErr(e) == nil && data != nil {
 			copy(s.depthRaw, (*[1 << 20]uint16)(unsafe.Pointer(data))[:n:n])
-			if err := realsense.ApplyColorMap(s.depthRaw, w, h, s.depthRGB, s.cfg.DepthMinMM, s.cfg.DepthMaxMM); err == nil {
+			if err := realsense.ApplyColorMapScaled(s.depthRaw, w, h, s.depthRGB, s.cfg.DepthMinMM, s.cfg.DepthMaxMM); err == nil {
 				set[realsense.KindDepth] = &realsense.Frame{Kind: realsense.KindDepth, Width: w, Height: h, Data: s.depthRGB}
 			}
 		}
