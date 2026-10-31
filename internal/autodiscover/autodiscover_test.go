@@ -18,6 +18,9 @@ func sampleDevices() []stream.Device {
 	return []stream.Device{
 		{Name: "Integrated Camera", Source: "Integrated Camera", Type: "dshow", Kind: "builtin"},
 		{Name: "WL24A", Source: "WL24A", Type: "dshow", Kind: "usb", AltSource: "@device_pnp_\\\\?\\usb#vid_1234"},
+		// RealSense 深度相机家族：整机由 rs-pipe 独占托管，不走普通摄像头自动添加。
+		{Name: "Intel(R) RealSense(TM) Depth Camera 435 with RGB Module Depth", Source: "Intel(R) RealSense(TM) Depth Camera 435 with RGB Module Depth", Type: "dshow", Kind: "usb"},
+		{Name: "Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB", Source: "Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB", Type: "dshow", Kind: "usb"},
 		{Name: "整个桌面（全部显示器拼接）", Source: "desktop", Type: "screen", Kind: "screen"},
 		{Name: "显示器 1（1920×1080），主屏", Source: "desktop@0,0,1920x1080", Type: "screen", Kind: "screen"},
 		{Name: "显示器 2（2560×1440）", Source: "desktop@-1945,-1480,2560x1440", Type: "screen", Kind: "screen"},
@@ -47,6 +50,27 @@ func TestDiscoverAddsCamerasAndScreens(t *testing.T) {
 	}
 	if root.Cameras[2].Source != "desktop@0,0,1920x1080" {
 		t.Fatalf("aggregate screen should be skipped, first screen = %+v", root.Cameras[2])
+	}
+	// RealSense 设备不得被自动添加（rs-pipe 独占托管，见 rsPipeManagedRe）。
+	for _, c := range root.Cameras {
+		if rsPipeManagedRe.MatchString(c.Name) {
+			t.Fatalf("realsense device must not be auto-added: %+v", c)
+		}
+	}
+}
+
+// TestDiscoverSkipsRealSense D435 实测枚举出 Depth/RGB 两个 dshow 节点，
+// 均应跳过：与 rs-pipe 的 USB 独占冲突，且 Depth 节点 raw16 无法直采。
+func TestDiscoverSkipsRealSense(t *testing.T) {
+	store := newStore(t)
+	added := discover(store, "ffmpeg", true, false, slog.Default(), fakeList(sampleDevices(), nil))
+	for _, c := range added {
+		if rsPipeManagedRe.MatchString(c.Name) {
+			t.Fatalf("realsense must be skipped: %+v", c)
+		}
+	}
+	if len(added) != 2 {
+		t.Fatalf("only normal cameras should be added, got %+v", added)
 	}
 }
 

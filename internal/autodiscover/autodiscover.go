@@ -14,6 +14,7 @@ package autodiscover
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/linuxsuren/local-onvif-adapter/internal/config"
@@ -21,6 +22,12 @@ import (
 )
 
 const maxCameras = 16
+
+// rsPipeManagedRe 匹配由 rs-pipe 托管的深度相机家族设备名。
+// 这类设备的整机会被 librealsense 独占：作为普通 dshow/v4l2 摄像头
+// 自动添加必然与 rs-pipe 抢 USB（互斥失败），且 Depth 节点输出 raw16
+// 无法直接采；统一走管理台"深度相机"一键添加流程。
+var rsPipeManagedRe = regexp.MustCompile(`(?i)realsense`)
 
 // listFn 设备枚举函数（测试注入用）。
 type listFn func(ffmpegBin string) ([]stream.Device, error)
@@ -53,6 +60,11 @@ func discover(store *config.Store, ffmpegBin string, autoCameras, autoScreens bo
 			}
 			// 屏幕聚合项跳过：只逐显示器添加，否则整桌面与分屏内容重复。
 			if isScreen && isAggregateScreenSource(d.Source) {
+				continue
+			}
+			// RealSense 深度相机跳过：整机归 rs-pipe 独占托管，
+			// 由管理台"深度相机"流程统一接入（真机 D435 实测枚举名含 RealSense）。
+			if rsPipeManagedRe.MatchString(d.Name) {
 				continue
 			}
 			if cameraExists(root.Cameras, d) {
