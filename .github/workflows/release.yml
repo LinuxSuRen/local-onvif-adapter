@@ -306,11 +306,17 @@ jobs:
           # 无相机环境：list 应正常退出（枚举 0 台）；
           # fake 模式应持续运行（timeout 杀掉验证存活）。
           "$T/rs-pipe" list
-          set +e
-          timeout 5 "$T/rs-pipe" serve --port 18099 --fake >/dev/null 2>&1
-          code=$?
-          set -e
-          [ "$code" -eq 124 ] || { echo "fake serve exited $code (expect 124=timeout-killed, i.e. still running)"; exit 1; }
+          # fake 模式应持续运行 5 秒不退出（macOS 无 timeout 命令，用 POSIX 后台探测）。
+          "$T/rs-pipe" serve --port 18099 --fake >/dev/null 2>&1 &
+          pid=$!
+          sleep 5
+          if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"; wait "$pid" 2>/dev/null || true
+            echo "fake serve alive after 5s"
+          else
+            code=0; wait "$pid" || code=$?
+            echo "fake serve exited early ($code)"; exit 1
+          fi
 
       - name: Smoke test rs-pipe (windows)
         if: runner.os == 'Windows'
