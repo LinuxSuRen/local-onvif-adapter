@@ -158,10 +158,10 @@ jobs:
             # Intel Mac 请按 README 自行编译。
             RSUSB=OFF
             git clone --depth 1 --branch v1.0.27 https://github.com/libusb/libusb.git /tmp/libusb
-            cmake -S /tmp/libusb -B /tmp/libusb/build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_LIBDIR=lib -DENABLE_UDEV_BACKEND=OFF
-            cmake --build /tmp/libusb/build --parallel "$(sysctl -n hw.ncpu)"
-            sudo cmake --install /tmp/libusb/build
+            cd /tmp/libusb
+            ./autogen.sh --disable-shared --enable-static --disable-udev
+            make --jobs "$(sysctl -n hw.ncpu)"
+            sudo make install
             ls -lh /usr/local/lib/libusb-1.0.a
           else
             sudo apt-get update
