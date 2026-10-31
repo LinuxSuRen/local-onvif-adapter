@@ -171,6 +171,11 @@ type Server struct {
 	RealsenseBin  string `json:"realsense_bin"`  // 默认 rs-pipe（PATH 或同目录）
 	RealsenseFake bool   `json:"realsense_fake"` // 合成帧模式
 	Discovery     bool   `json:"discovery"`      // 是否开启 WS-Discovery
+	// 启动时自动发现：枚举本机设备，把未配置的摄像头/显示器自动创建并启用
+	//（按 Type+Source 匹配，已有条目——包括用户手动禁用的——不受影响）。
+	// 默认均开启；命令行/环境变量每次启动写回，见 main。
+	AutoCameras bool `json:"auto_cameras"`
+	AutoScreens bool `json:"auto_screens"`
 	// 设备面认证（ONVIF SOAP + RTSP），管理台/API 不设防；单一账号。
 	// 口令明文存配置文件：RTSP Digest 与 WS-PasswordDigest 的服务端
 	// 校验都要求明文参与哈希，无法只存摘要。
@@ -211,6 +216,8 @@ func Default() *Root {
 			FFmpegBin:    "ffmpeg",
 			RealsenseBin: "rs-pipe",
 			Discovery:    true,
+			AutoCameras:  true,
+			AutoScreens:  true,
 		},
 		Manufacturer: "linuxsuren",
 		Model:        "local-onvif-adapter",

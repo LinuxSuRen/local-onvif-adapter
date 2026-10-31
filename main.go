@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/linuxsuren/local-onvif-adapter/internal/api"
+	"github.com/linuxsuren/local-onvif-adapter/internal/autodiscover"
 	"github.com/linuxsuren/local-onvif-adapter/internal/config"
 	"github.com/linuxsuren/local-onvif-adapter/internal/discovery"
 	"github.com/linuxsuren/local-onvif-adapter/internal/onvifserver"
@@ -55,6 +56,8 @@ func main() {
 		ffmpegBin   = flag.String("ffmpeg-bin", envOr("FFMPEG_BIN", "ffmpeg"), "ffmpeg 可执行文件路径")
 		videoEnc    = flag.String("video-encoder", envOr("VIDEO_ENCODER", "auto"), "视频编码器：auto（libx264）| libx264 | h264_v4l2m2m（V4L2 硬件编码，实验性，见 README 实测说明）")
 		discoveryOn = flag.Bool("discovery", envBool("DISCOVERY", true), "是否开启 WS-Discovery")
+		autoCameras = flag.Bool("auto-cameras", envBool("AUTO_CAMERAS", true), "启动时自动发现并启用本机摄像头（未配置的设备自动创建）")
+		autoScreens = flag.Bool("auto-screens", envBool("AUTO_SCREENS", true), "启动时自动发现并启用本机显示器（未配置的屏幕自动创建）")
 		logLevel    = flag.String("log-level", envOr("LOG_LEVEL", "info"), "日志级别 debug|info|warn|error")
 		showVersion = flag.Bool("version", false, "打印版本并退出")
 	)
@@ -94,12 +97,20 @@ func main() {
 		r.Server.RTSPEmbedded = *rtspServer
 		r.Server.FFmpegBin = *ffmpegBin
 		r.Server.Discovery = *discoveryOn
+		r.Server.AutoCameras = *autoCameras
+		r.Server.AutoScreens = *autoScreens
 		return nil
 	}); err != nil {
 		logger.Error("save config failed", "err", err.Error())
 		os.Exit(1)
 	}
 	root := store.Root()
+
+	// 启动时自动发现（issue #32）：把未配置的本机摄像头/显示器补进配置，
+	// 再重读配置供后续取流 Sync 使用；已有条目（含手动禁用）不受影响。
+	autodiscover.Discover(store, root.Server.FFmpegBin,
+		root.Server.AutoCameras, root.Server.AutoScreens, logger)
+	root = store.Root()
 
 	ip := root.Server.AdvertiseIP
 	if ip == "" {
