@@ -152,10 +152,17 @@ jobs:
           set -euo pipefail
           RSUSB=ON
           if [ "$RUNNER_OS" = "macOS" ]; then
-            # macOS 用系统默认后端（不依赖 libusb，brew 依赖是单架构的）。
+            # macOS 默认后端同样链接 libusb（request-libusb.cpp 等）；
+            # 源码编静态 libusb（秒级），产物保持零动态依赖。
             # 只出 arm64：fastcdr 在 x86_64 slice 有 long double 编译老坑，
             # Intel Mac 请按 README 自行编译。
             RSUSB=OFF
+            git clone --depth 1 --branch v1.0.27 https://github.com/libusb/libusb.git /tmp/libusb
+            cmake -S /tmp/libusb -B /tmp/libusb/build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_LIBDIR=lib -DENABLE_UDEV_BACKEND=OFF
+            cmake --build /tmp/libusb/build --parallel "$(sysctl -n hw.ncpu)"
+            sudo cmake --install /tmp/libusb/build
+            ls -lh /usr/local/lib/libusb-1.0.a
           else
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends cmake build-essential libusb-1.0-0-dev
@@ -201,7 +208,7 @@ jobs:
           # Apple ld 无 --start-group：按"被依赖者在后"排序 + 整组重复一遍消环。
           CGO_ENABLED=1 \
           CGO_CFLAGS="-I/tmp/rs/include" \
-          CGO_LDFLAGS="-L/opt/rs/lib -lrealsense2 ${RS_LIBS//-lrealsense2 /} ${RS_LIBS} -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit" \
+          CGO_LDFLAGS="-L/opt/rs/lib -lrealsense2 ${RS_LIBS//-lrealsense2 /} ${RS_LIBS} -L/usr/local/lib -lusb-1.0 -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit" \
             go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
           cp LICENSE README.md dist/pkg/
           (cd dist/pkg && tar -czf "../rs-pipe_darwin_arm64.tar.gz" .)
@@ -257,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           RUNNER_OS_LC="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
-          NATIVE="rs-pipe_${RUNNER_OS_LC}_$(uname -m | sed 's/x86_64/amd64/')"
+          NATIVE="rs-pipe_${RUNNER_OS_LC}_$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
           T=$(mktemp -d)
           tar -xzf "dist/${NATIVE}.tar.gz" -C "$T"
           file "$T/rs-pipe"
