@@ -101,6 +101,7 @@ jobs:
           shasum -a 256 *.tar.gz *.zip > checksums.txt
 
       - name: Upload assets to the Release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -108,6 +109,13 @@ jobs:
           echo "上传以下资产到 Release ${TAG}:"
           ls -lh dist/
           gh release upload "${TAG}" dist/*.tar.gz dist/*.zip dist/checksums.txt --clobber
+
+      - name: Upload main binaries to workflow artifacts (dispatch 模式)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: main_binaries
+          path: dist/*
 
   # 深度相机采集器 rs-pipe：cgo + librealsense，无法与主程序一起交叉编译，
   # 按平台原生 runner 构建（Linux/macOS 源码静态编译 + RSUSB 后端免 udev；
