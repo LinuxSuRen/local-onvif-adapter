@@ -171,7 +171,10 @@ jobs:
         run: |
           set -euo pipefail
           # librealsense 是 C++ 库：静态链接必须带 C++ 运行时（linux: libstdc++ / mac: libc++）。
-          EXTRA_LDFLAGS="-lstdc++ -lusb-1.0 -lpthread -lm"
+          # -static-libstdc++/-static-libgcc：把 C++/gcc 运行时一并静态打进产物，
+          # 目标机免装 libstdc++（最小容器也没有），落实"单文件零依赖"；
+          # cgo 以 gcc（C 驱动）链接，不隐式带 C++ 库，因此 -lstdc++ 必须显式。
+          EXTRA_LDFLAGS="-lstdc++ -static-libstdc++ -static-libgcc -lusb-1.0 -lpthread -lm"
           if [ "${{ matrix.goos }}" = "darwin" ]; then
             EXTRA_LDFLAGS="-lc++ -lusb-1.0 -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit"
           fi
