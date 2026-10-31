@@ -145,9 +145,22 @@ jobs:
           go-version: stable
           cache: true
 
+      # librealsense 源码编译 10+ 分钟，且 macos runner 有被回收（job 莫名
+      # cancelled）的观察——缓存静态库产物把作业压到几分钟，缩小暴露窗口。
+      - name: Cache librealsense static libs
+        id: rslibs
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/rs/lib
+            /usr/local/lib/libusb-1.0.a
+            /tmp/rs/include
+          key: rslibs-${{ runner.os }}-${{ runner.arch }}-${{ env.LIBREALSENSE_VERSION }}-v3
+
       # ---- Linux/macOS：源码静态编译 librealsense ----
       - name: Build librealsense (static)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && steps.rslibs.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           RSUSB=ON
@@ -185,6 +198,16 @@ jobs:
           ls -lh /opt/rs/lib/
           RS_LIBS=$(ls /opt/rs/lib/*.a | sed 's|.*/lib|-l|; s|\.a$||' | tr '\n' ' ')
           echo "RS_LIBS=${RS_LIBS}" >> "$GITHUB_ENV"
+
+      # 缓存命中时编译步骤被跳过，这里统一重算链接旗标。
+      - name: Prepare link flags
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          ls -lh /opt/rs/lib/ | head -20
+          RS_LIBS=$(ls /opt/rs/lib/*.a | sed 's|.*/lib|-l|; s|\.a$||' | tr '\n' ' ')
+          echo "RS_LIBS=${RS_LIBS}" >> "$GITHUB_ENV"
+          test -d /tmp/rs/include/librealsense2
 
       - name: Build rs-pipe (linux)
         if: runner.os == 'Linux'
