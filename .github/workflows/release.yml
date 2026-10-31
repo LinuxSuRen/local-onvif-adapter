@@ -265,7 +265,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           set -euo pipefail
-          RUNNER_OS_LC="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')"
+          RUNNER_OS_LC="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]' | sed 's/macos/darwin/')"
           NATIVE="rs-pipe_${RUNNER_OS_LC}_$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
           T=$(mktemp -d)
           tar -xzf "dist/${NATIVE}.tar.gz" -C "$T"
