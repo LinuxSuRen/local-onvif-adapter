@@ -218,6 +218,13 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 管理台添加摄像头时**自动枚举本机摄像头**（内置、USB，名称与连接方式直接列出），
 用户从列表中选择即可，无需关心平台差异；跨平台适配由服务端完成：
 
+**启动时自动发现**（默认开启，`--auto-cameras=false` / `--auto-screens=false` 关闭）：
+启动阶段枚举本机设备，把尚未配置的摄像头/显示器自动创建为已启用的摄像头。
+按 Type+Source 匹配去重——已有条目（包括手动禁用的）不受影响，参数定制保留；
+屏幕只逐显示器添加（"整桌面拼接"项跳过）。Windows 同型号多台摄像头按 PnP
+别名精确定位。枚举失败（如无 ffmpeg）只告警不阻断启动。RealSense 深度相机
+家族设备跳过——整机由 rs-pipe 独占托管，请走管理台"深度相机"一键添加。
+
 | 内部类型 | 平台 | 枚举方式 | 源形式 |
 |---|---|---|---|
 | `v4l2` | Linux | 扫描 `/dev/video*` + sysfs 读取名称与连接方式（过滤 UVC 元数据节点） | `/dev/video0` |
@@ -424,6 +431,8 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 | `--ffmpeg-bin` | `FFMPEG_BIN` | `ffmpeg` | ffmpeg 路径 |
 | `--video-encoder` | `VIDEO_ENCODER` | `auto` | 视频编码器：`auto`/`libx264` 均为软编码；`h264_v4l2m2m` 为 V4L2 硬件编码（实验性，见下） |
 | `--discovery` | `DISCOVERY` | `true` | 是否开启 WS-Discovery |
+| `--auto-cameras` | `AUTO_CAMERAS` | `true` | 启动时自动发现并启用本机摄像头（未配置的设备自动创建） |
+| `--auto-screens` | `AUTO_SCREENS` | `true` | 启动时自动发现并启用本机显示器（未配置的屏幕自动创建） |
 | `--log-level` | `LOG_LEVEL` | `info` | 日志级别 |
 
 ## 帧率与硬件编码（树莓派等 arm 设备）
