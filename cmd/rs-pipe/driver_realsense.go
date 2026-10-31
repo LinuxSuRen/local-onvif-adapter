@@ -17,6 +17,22 @@ package main
 /*
 #cgo LDFLAGS: -lrealsense2
 #include <librealsense2/rs.h>
+// SDK 2.59 起 rs.h 不再级联 pipeline/config 头（仅 C++ hpp 链引入），
+// 纯 C 使用必须显式包含；旧版 SDK 有 include guard，重复包含无害。
+#include <librealsense2/h/rs_pipeline.h>
+#include <librealsense2/h/rs_config.h>
+// SDK 2.59 起 rs2_get_stream_profile_data 新增 framerate 出参；
+// 用版本自适应包装统一新旧 SDK 的调用形态（旧版忽略 framerate）。
+static void go_rs2_get_stream_profile_data(const rs2_stream_profile* mode,
+    rs2_stream* stream, rs2_format* format, int* index, int* unique_id,
+    int* framerate, rs2_error** error) {
+#if RS2_API_VERSION >= 25900
+    rs2_get_stream_profile_data(mode, stream, format, index, unique_id, framerate, error);
+#else
+    (void)framerate;
+    rs2_get_stream_profile_data(mode, stream, format, index, unique_id, error);
+#endif
+}
 */
 import "C"
 
@@ -80,8 +96,8 @@ type rsSource struct {
 	cfg realsense.Config
 
 	mu       sync.Mutex
-	pipe     C.rs2_pipeline
-	prof     C.rs2_pipeline_profile
+	pipe     *C.rs2_pipeline        // SDK 2.59 头文件下 cgo 的句柄须用指针形态（值形态会与函数签名分裂成两种类型）
+	prof     *C.rs2_pipeline_profile
 	colorRGB []byte // 复用缓冲（帧尺寸固定，避免每帧分配）
 	depthRGB []byte
 	irRGB    []byte
@@ -238,7 +254,7 @@ func (s *rsSource) Poll() (realsense.FrameSet, error) {
 }
 
 // extractStream 在帧组中找到指定类型的帧（找不到返回 ok=false）。
-func extractStream(frames C.rs2_frame, stream C.rs2_stream) (C.rs2_frame, bool) {
+func extractStream(frames *C.rs2_frame, stream C.rs2_stream) (*C.rs2_frame, bool) {
 	var e *C.rs2_error
 	cnt := int(C.rs2_embedded_frames_count(frames, &e))
 	for i := 0; i < cnt; i++ {
@@ -251,8 +267,8 @@ func extractStream(frames C.rs2_frame, stream C.rs2_stream) (C.rs2_frame, bool) 
 		if rsErr(e) == nil && prof != nil {
 			var st C.rs2_stream
 			var fmt_ C.rs2_format
-			var idx, uid C.int
-			C.rs2_get_stream_profile_data(prof, &st, &fmt_, &idx, &uid, &e)
+			var idx, uid, fps C.int
+			C.go_rs2_get_stream_profile_data(prof, &st, &fmt_, &idx, &uid, &fps, &e)
 			if rsErr(e) == nil && st == stream {
 				ok = true
 			}
