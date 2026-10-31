@@ -157,6 +157,7 @@ jobs:
             # 只出 arm64：fastcdr 在 x86_64 slice 有 long double 编译老坑，
             # Intel Mac 请按 README 自行编译。
             RSUSB=OFF
+            brew install autoconf automake libtool
             git clone --depth 1 --branch v1.0.27 https://github.com/libusb/libusb.git /tmp/libusb
             cd /tmp/libusb
             ./autogen.sh --disable-shared --enable-static --disable-udev
