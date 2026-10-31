@@ -259,8 +259,11 @@ cmd/rs-pipe（独占设备，默认端口 18020/18021/18022）
 
 使用步骤：
 
-1. 编译采集器并放到 adapter 可寻址位置（默认 `realsense_bin=rs-pipe`），
-   按平台安装依赖后构建（见下方「rs-pipe 真机构建」）。
+1. 拿到采集器并放到 adapter 可寻址位置（默认 `realsense_bin=rs-pipe`）：
+   - **干净环境（推荐）**：从 GitHub [Releases](https://github.com/LinuxSuRen/local-onvif-adapter/releases)
+     下载 `rs-pipe_<平台>_<架构>` 包——Linux/macOS 为静态单文件（RSUSB 后端，
+     免装 udev 规则），Windows 包内附 `realsense2.dll`（与 exe 同目录即可）；
+   - 或自行编译：按平台安装依赖后构建（见下方「rs-pipe 真机构建」）。
 2. 管理台「添加摄像头 → 深度相机」一键添加：自动检测设备并列出型号与
    序列号，选择常用档位（640×480@15 / 848×480@30 / 1280×720@30）后一次
    创建三路摄像头（`前缀-彩色` / `-深度` / `-红外`），源端口由服务端固定
