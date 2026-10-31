@@ -104,8 +104,10 @@ ffplay rtsp://admin:密码@<本机IP>:8554/cam/<摄像头ID>
 把多个摄像头的画面按自定义布局拼到一张画布，**合成单路 H.264 流**对外输出：
 本地 `rtsp://host:8554/cam/<布局ID>`（作为普通通道被 NVR/ONVIF 客户端拉流），
 并可同时 `tee` 直推多个远端目标（rtsp/rtmp/srt，复用按需直推的目标校验与脱敏）。
-管理台「融合布局」面板可视化编辑：从摄像头列表添加画面，画布上**拖拽移动、
-拖角缩放**（网格吸附 + 像素级微调），快照轮询预览，保存后即生效。
+管理台可视化编辑：布局在「摄像头列表 → 添加摄像头 → 融合布局」创建（创建后
+自动打开编辑器），或点列表中布局记录的「编辑」进入；画布上**拖拽移动、
+拖角缩放**（网格吸附 + 像素级微调），快照轮询预览，保存后即生效；
+列表记录同样支持删除（合成流与推流会话一并停止）。
 
 ```
 画面格(cell) ──ffmpeg 中继──▶ rawvideo 定长帧 ──┐
@@ -218,7 +220,7 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 管理台添加摄像头时**自动枚举本机摄像头**（内置、USB，名称与连接方式直接列出），
 用户从列表中选择即可，无需关心平台差异；跨平台适配由服务端完成：
 
-**启动时自动发现**（默认开启，`--auto-cameras=false` / `--auto-screens=false` 关闭）：
+**启动时自动发现**（默认关闭，`--auto-cameras=true` / `--auto-screens=true` 开启）：
 启动阶段枚举本机设备，把尚未配置的摄像头/显示器自动创建为已启用的摄像头。
 按 Type+Source 匹配去重——已有条目（包括手动禁用的）不受影响，参数定制保留；
 屏幕只逐显示器添加（"整桌面拼接"项跳过）。Windows 同型号多台摄像头按 PnP
@@ -431,8 +433,8 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 | `--ffmpeg-bin` | `FFMPEG_BIN` | `ffmpeg` | ffmpeg 路径 |
 | `--video-encoder` | `VIDEO_ENCODER` | `auto` | 视频编码器：`auto`/`libx264` 均为软编码；`h264_v4l2m2m` 为 V4L2 硬件编码（实验性，见下） |
 | `--discovery` | `DISCOVERY` | `true` | 是否开启 WS-Discovery |
-| `--auto-cameras` | `AUTO_CAMERAS` | `true` | 启动时自动发现并启用本机摄像头（未配置的设备自动创建） |
-| `--auto-screens` | `AUTO_SCREENS` | `true` | 启动时自动发现并启用本机显示器（未配置的屏幕自动创建） |
+| `--auto-cameras` | `AUTO_CAMERAS` | `false` | 启动时自动发现并启用本机摄像头（默认关闭；未配置的设备自动创建） |
+| `--auto-screens` | `AUTO_SCREENS` | `false` | 启动时自动发现并启用本机显示器（默认关闭；未配置的屏幕自动创建） |
 | `--log-level` | `LOG_LEVEL` | `info` | 日志级别 |
 
 ## 帧率与硬件编码（树莓派等 arm 设备）

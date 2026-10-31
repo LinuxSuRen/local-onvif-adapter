@@ -4,7 +4,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCameras,
   getMosaics,
-  createMosaic,
   updateMosaic,
   deleteMosaic,
   startMosaicPush,
@@ -14,7 +13,12 @@ import {
 // 融合布局编辑器：
 //   画布按百分比渲染 cells（x/y/w/h 为画布绝对像素，服务端校验并偶数对齐）；
 //   编辑期改动 800ms 防抖自动保存——布局变化会重启合成流，防抖保证拖拽结束才落一次。
-const emit = defineEmits(['updated'])
+//   创建入口在「添加摄像头 → 融合布局」；本面板只负责编辑已有布局
+//   （由 focusId 指定打开哪条记录，表格行"编辑"或创建完成后跳转进来）。
+const props = defineProps({
+  focusId: { type: String, default: '' }
+})
+const emit = defineEmits(['updated', 'close'])
 
 const mosaics = ref([])
 const cameras = ref([])
@@ -34,15 +38,6 @@ const snapTick = ref(0)
 const previewSrcs = reactive({})
 
 const pushTarget = ref('')
-const createVisible = ref(false)
-const createForm = reactive({
-  name: '',
-  width: 1920,
-  height: 1080,
-  framerate: 15,
-  bitrate_kbps: 4096,
-  loss_policy: 'blackframe'
-})
 
 let statusTimer = null
 let snapTimer = null
@@ -117,6 +112,19 @@ onUnmounted(() => {
 })
 
 watch(selectedId, () => exitEdit(false))
+
+// 外部指定打开某条布局（表格行"编辑" / 新建完成后跳转）。
+watch(
+  () => props.focusId,
+  (id) => {
+    if (!id) return
+    if (id !== selectedId.value) {
+      selectedId.value = id
+      exitEdit(false)
+    }
+  },
+  { immediate: true }
+)
 
 // ---- 编辑与保存 ----
 
@@ -337,24 +345,6 @@ function formatUptime(sec) {
 
 // ---- 布局级操作 ----
 
-async function doCreate() {
-  if (!createForm.name.trim()) {
-    ElMessage.warning('请填写布局名称')
-    return
-  }
-  try {
-    const created = await createMosaic({ ...createForm })
-    ElMessage.success('已创建')
-    createVisible.value = false
-    createForm.name = ''
-    await load()
-    selectedId.value = created.id
-    emit('updated')
-  } catch (e) {
-    ElMessage.error(e.message)
-  }
-}
-
 async function handleRemove() {
   if (!current.value) return
   try {
@@ -444,9 +434,6 @@ async function finishEdit() {
         >
           <el-option v-for="m in mosaics" :key="m.id" :value="m.id" :label="m.name" />
         </el-select>
-        <el-button type="primary" @click="createVisible = true">
-          <el-icon><Plus /></el-icon>新建布局
-        </el-button>
         <el-button v-if="!editing" type="primary" plain @click="enterEdit">
           <el-icon><Edit /></el-icon>编辑布局
         </el-button>
@@ -459,10 +446,11 @@ async function finishEdit() {
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>刷新
         </el-button>
+        <el-button @click="emit('close')">返回列表</el-button>
       </div>
     </div>
 
-    <el-empty v-if="!current" description="还没有融合布局，新建后把多个画面拖进画布合成一路流" />
+    <el-empty v-if="!current" description="还没有融合布局；在上方摄像头列表点「添加摄像头」选择「融合布局」新建" />
 
     <template v-else>
       <!-- 无画面源引导：空布局的合成流是纯黑画面，先加摄像头再编辑布局 -->
@@ -685,35 +673,6 @@ async function finishEdit() {
       </div>
     </template>
 
-    <!-- 新建对话框 -->
-    <el-dialog v-model="createVisible" title="新建融合布局" width="480px">
-      <el-form label-width="110px">
-        <el-form-item label="名称" required>
-          <el-input v-model="createForm.name" placeholder="如：四分屏" />
-        </el-form-item>
-        <el-form-item label="画布尺寸">
-          <el-input-number v-model="createForm.width" :min="64" :max="3840" :step="2" />
-          <span class="mo-form-sep">×</span>
-          <el-input-number v-model="createForm.height" :min="64" :max="2160" :step="2" />
-        </el-form-item>
-        <el-form-item label="帧率">
-          <el-input-number v-model="createForm.framerate" :min="1" :max="30" />
-        </el-form-item>
-        <el-form-item label="码率（kbps）">
-          <el-input-number v-model="createForm.bitrate_kbps" :min="256" :max="8192" :step="64" />
-        </el-form-item>
-        <el-form-item label="断流策略">
-          <el-select v-model="createForm.loss_policy" style="width: 100%">
-            <el-option value="blackframe" label="黑帧兜底（单路断流只黑一格）" />
-            <el-option value="restart" label="整体重启（任一路断流重启合成流）" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" @click="doCreate">创建</el-button>
-      </template>
-    </el-dialog>
   </el-card>
 </template>
 

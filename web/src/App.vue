@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getSystem, getCameras, deleteCamera } from './api'
+import { getSystem, getCameras, deleteCamera, deleteMosaic } from './api'
 import SystemCard from './components/SystemCard.vue'
 import CameraTable from './components/CameraTable.vue'
 import CameraDialog from './components/CameraDialog.vue'
@@ -19,6 +19,25 @@ const snapshotVisible = ref(false)
 const snapshotCamera = ref(null)
 const ptzVisible = ref(false)
 const ptzCamera = ref(null)
+
+// 融合布局编辑器：不常驻展示，编辑行/创建完成后在抽屉里打开。
+const mosaicVisible = ref(false)
+const mosaicFocusId = ref('')
+
+function openMosaicEditor(id) {
+  mosaicFocusId.value = id || ''
+  mosaicVisible.value = true
+}
+
+async function handleRemoveMosaic(row) {
+  try {
+    await deleteMosaic(row.id)
+    ElMessage.success('融合布局已删除')
+    await loadAll()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
 
 async function loadAll() {
   loading.value = true
@@ -101,13 +120,17 @@ async function handleRemove(camera) {
       @snapshot="openSnapshot"
       @ptz="openPtz"
       @remove="handleRemove"
+      @edit-mosaic="openMosaicEditor"
+      @remove-mosaic="handleRemoveMosaic"
     />
 
-    <CameraDialog v-model:visible="dialogVisible" :camera="editingCamera" @saved="loadAll" />
+    <CameraDialog v-model:visible="dialogVisible" :camera="editingCamera" @saved="loadAll" @open-mosaic="openMosaicEditor" />
     <SnapshotDialog v-model:visible="snapshotVisible" :camera="snapshotCamera" />
     <PtzDrawer v-model:visible="ptzVisible" :camera="ptzCamera" />
 
-    <MosaicPanel class="block" @updated="loadAll" />
+    <el-drawer v-model="mosaicVisible" title="融合布局编辑器" size="72%" destroy-on-close>
+      <MosaicPanel :focus-id="mosaicFocusId" @updated="loadAll" @close="mosaicVisible = false" />
+    </el-drawer>
   </div>
 </template>
 

@@ -216,8 +216,8 @@ func Default() *Root {
 			FFmpegBin:    "ffmpeg",
 			RealsenseBin: "rs-pipe",
 			Discovery:    true,
-			AutoCameras:  true,
-			AutoScreens:  true,
+			AutoCameras:  false, // 自动发现默认关闭：显式开启（flag/环境变量/配置）才补录设备
+			AutoScreens:  false,
 		},
 		Manufacturer: "linuxsuren",
 		Model:        "local-onvif-adapter",

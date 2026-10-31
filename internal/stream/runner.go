@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -698,15 +699,29 @@ func darwinScreenArgs(c config.Camera) []string {
 
 // darwinScreenCmd 返回 macOS 屏幕采集的 shell 包装命令。
 // runner 在 darwin 平台 screen 类型时用此命令作为 ffmpeg 的 stdin 来源。
+//   - 每路摄像头独立临时文件：多屏并发时共享一个文件会互相 cat/rm 踩踏，
+//     导致 image2pipe 读到半张 PNG 流中断（真机双屏实测复现）；
+//   - source 为 avfoundation 屏幕索引（0 起），映射到 screencapture 的
+//     1 起显示器编号（-D）；缺省不指定 = 主屏。
 func darwinScreenCmd(c config.Camera) string {
 	fps := c.FramerateOrDefault()
 	if fps <= 0 {
 		fps = 5
 	}
+	display := ""
+	if n, err := strconv.Atoi(strings.TrimSpace(c.Source)); err == nil && n >= 0 {
+		display = fmt.Sprintf(" -D %d", n+1)
+	}
 	return fmt.Sprintf(
-		"while true; do screencapture -x -t png /tmp/_onvif_sc_tmp.png 2>/dev/null; cat /tmp/_onvif_sc_tmp.png; rm -f /tmp/_onvif_sc_tmp.png; sleep %.3f; done",
-		1.0/float64(fps),
+		"while true; do screencapture -x -t png%s /tmp/_onvif_sc_%s.png 2>/dev/null; cat /tmp/_onvif_sc_%s.png 2>/dev/null; rm -f /tmp/_onvif_sc_%s.png; sleep %.3f; done",
+		display, c.ID, c.ID, c.ID, 1.0/float64(fps),
 	)
+}
+
+// DarwinScreenFeedCmd 导出 darwinScreenCmd 供快照直采路径复用
+//（快照的 ffmpeg 同样以 image2pipe 读 pipe:，需要相同的喂帧循环）。
+func DarwinScreenFeedCmd(c config.Camera) string {
+	return darwinScreenCmd(c)
 }
 
 // BuildArgs 构造完整的 ffmpeg 取流推流命令参数（编码器按默认 auto 解析，

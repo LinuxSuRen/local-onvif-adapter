@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,10 +55,64 @@ func (g *Generator) JPEG(cam config.Camera) ([]byte, error) {
 		// CSI 摄像头直抓走 rpicam-still（libcamera 原生输出 JPEG，不经 ffmpeg）。
 		return g.rpiStill(cam)
 	}
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	args := []string{"-hide_banner", "-loglevel", "error"}
+	if !(cam.Type == config.TypeScreen && runtime.GOOS == "darwin") {
+		args = append(args, "-nostdin")
+	}
 	args = append(args, stream.InputArgs(cam)...)
 	args = append(args, "-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1")
+	if cam.Type == config.TypeScreen && runtime.GOOS == "darwin" {
+		// macOS 屏幕直采：InputArgs 给出的是 image2pipe + pipe:，必须由
+		// screencapture 循环喂帧（与取流 Runner 同一命令），否则管道立即
+		// EOF——"pipe:: End of file" 即此路径缺失喂帧进程。
+		return g.capturedWithFeed(cam, args)
+	}
 	return g.captured(cam.ID, args)
+}
+
+// capturedWithFeed 在单独的 sh 子进程喂 stdin 的条件下抓帧（macOS 屏幕直采）。
+func (g *Generator) capturedWithFeed(cam config.Camera, args []string) ([]byte, error) {
+	g.mu.Lock()
+	if e, ok := g.cache[cam.ID]; ok && time.Since(e.at) < g.ttl {
+		g.mu.Unlock()
+		return e.data, nil
+	}
+	g.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	feed := exec.CommandContext(ctx, "/bin/sh", "-c", stream.DarwinScreenFeedCmd(cam)) //nolint:gosec // 固定解释器+受控命令
+	feedPipe, err := feed.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("screen feed pipe: %w", err)
+	}
+	if err := feed.Start(); err != nil {
+		return nil, fmt.Errorf("screen feed start: %w", err)
+	}
+	defer func() { _ = feed.Process.Kill() }()
+
+	ffmpeg := exec.CommandContext(ctx, g.bin, args...) //nolint:gosec // 路径来自受控配置
+	ffmpeg.Stdin = feedPipe
+	g.logger.Debug("capturing with feed", "camera", cam.ID, "args", args)
+	data, err := ffmpeg.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg capture failed: %w", err)
+	}
+	if err := g.storeFrame(cam.ID, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// storeFrame 写入帧缓存（拆出便于带喂帧路径复用）。
+func (g *Generator) storeFrame(key string, data []byte) error {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return fmt.Errorf("not a JPEG frame (%d bytes)", len(data))
+	}
+	g.mu.Lock()
+	g.cache[key] = cacheEntry{data: data, at: time.Now()}
+	g.mu.Unlock()
+	return nil
 }
 
 // rpiStill 用 rpicam-still 抓取一帧 JPEG（禁用预览与签名信息）。

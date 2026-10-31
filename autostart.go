@@ -124,12 +124,12 @@ func launchArgsFromConfig(dir string) ([]string, error) {
 	if !cfg.Discovery {
 		args = append(args, "-discovery=false")
 	}
-	// 自动发现同理：默认开启，仅在用户显式关闭时携带，避免自启动重置回默认。
-	if !cfg.AutoCameras {
-		args = append(args, "-auto-cameras=false")
+	// 自动发现同理：默认关闭，仅在用户显式开启时携带，避免自启动重置回默认。
+	if cfg.AutoCameras {
+		args = append(args, "-auto-cameras=true")
 	}
-	if !cfg.AutoScreens {
-		args = append(args, "-auto-screens=false")
+	if cfg.AutoScreens {
+		args = append(args, "-auto-screens=true")
 	}
 	return args, nil
 }
