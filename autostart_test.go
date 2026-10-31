@@ -49,7 +49,7 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 		t.Fatalf("default config should not carry optional flags: %q", join)
 	}
 	if strings.Contains(join, "-auto-cameras") || strings.Contains(join, "-auto-screens") {
-		t.Fatalf("default config (auto discovery on) should not carry auto flags: %q", join)
+		t.Fatalf("default config (auto discovery off) should not carry auto flags: %q", join)
 	}
 	// RTSP 端口不得携带：#15 语义下不携带该 flag 时配置文件即权威，
 	// 携带反而会把 install 时刻的端口冻结住，回滚用户后续修改。
@@ -68,7 +68,7 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 		r.Server.RTSPPort = 18655
 		r.Server.AdvertiseIP = "192.168.18.165"
 		r.Server.Discovery = false
-		r.Server.AutoCameras = false
+		r.Server.AutoScreens = true
 		r.Server.RTSPEmbedded = false
 		r.Server.RTSPPushAddr = "rtsp://127.0.0.1:1932"
 		return nil
@@ -80,7 +80,7 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 		t.Fatalf("launchArgsFromConfig(dir2): %v", err)
 	}
 	join = strings.Join(args, " ")
-	for _, want := range []string{"-http-addr 127.0.0.1:1235", "-advertise-ip 192.168.18.165", "-discovery=false", "-auto-cameras=false", "-rtsp-server false", "-rtsp-push rtsp://127.0.0.1:1932"} {
+	for _, want := range []string{"-http-addr 127.0.0.1:1235", "-advertise-ip 192.168.18.165", "-discovery=false", "-auto-screens=true", "-rtsp-server false", "-rtsp-push rtsp://127.0.0.1:1932"} {
 		if !strings.Contains(join, want) {
 			t.Fatalf("custom config args missing %q in %q", want, join)
 		}
@@ -88,9 +88,9 @@ func TestLaunchArgsFromConfig(t *testing.T) {
 	if strings.Contains(join, "-rtsp-port") {
 		t.Fatalf("args should not freeze -rtsp-port: %q", join)
 	}
-	// AutoScreens 未关（true）则不携带。
-	if strings.Contains(join, "-auto-screens") {
-		t.Fatalf("auto-screens default-on should not be carried: %q", join)
+	// AutoCameras 未开（false，即默认）则不携带。
+	if strings.Contains(join, "-auto-cameras") {
+		t.Fatalf("auto-cameras default-off should not be carried: %q", join)
 	}
 }
 

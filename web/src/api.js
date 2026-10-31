@@ -106,6 +106,22 @@ export function updateAuth(enabled, username, password) {
   return request('/api/auth', { method: 'PUT', body: { enabled, username, password } })
 }
 
+export function listRealsenseDevices() {
+  return request('/api/realsense/devices')
+}
+
+export function createRealsenseCameras(payload) {
+  return request('/api/realsense/cameras', { method: 'POST', body: payload })
+}
+
+export function getRealsenseSettings() {
+  return request('/api/realsense/settings')
+}
+
+export function updateRealsenseSettings(bin) {
+  return request('/api/realsense/settings', { method: 'PUT', body: { realsense_bin: bin } })
+}
+
 // ---- 融合布局 ----
 
 export function getMosaics() {

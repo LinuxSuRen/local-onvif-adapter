@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { updateDiscovery, updateRtspPort, updateAuth } from '../api'
+import { updateDiscovery, updateRtspPort, updateAuth, listRealsenseDevices, getRealsenseSettings, updateRealsenseSettings } from '../api'
 
 const props = defineProps({
   system: { type: Object, default: null }
@@ -87,6 +87,45 @@ async function saveAuth() {
   }
 }
 
+// 深度相机采集器（rs-pipe）：路径配置 + 检测状态。
+const rsDialog = ref(false)
+const rsSaving = ref(false)
+const rsChecking = ref(false)
+const rsBinInput = ref('')
+const rsStatus = ref(null) // { bin_available, devices: [{serial,name}] }
+
+function openRsDialog() {
+  rsDialog.value = true
+  rsStatus.value = null
+  getRealsenseSettings()
+    .then((s) => { rsBinInput.value = (s && s.realsense_bin) || '' })
+    .catch(() => {})
+}
+
+async function checkRs() {
+  rsChecking.value = true
+  try {
+    rsStatus.value = await listRealsenseDevices()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    rsChecking.value = false
+  }
+}
+
+async function saveRs() {
+  rsSaving.value = true
+  try {
+    await updateRealsenseSettings(rsBinInput.value.trim())
+    ElMessage.success('采集器路径已保存，即时生效')
+    await checkRs()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    rsSaving.value = false
+  }
+}
+
 async function copyEndpoint() {
   const text = props.system && props.system.onvif_endpoint
   if (!text) return
@@ -160,6 +199,11 @@ async function onToggleDiscovery(val) {
           未开启，配置
         </el-button>
       </el-descriptions-item>
+      <el-descriptions-item label="深度相机">
+        <el-button size="small" text type="primary" @click="openRsDialog">
+          <el-icon><Edit /></el-icon>采集器配置
+        </el-button>
+      </el-descriptions-item>
       <el-descriptions-item label="版本">
         {{ system && system.version ? system.version : '—' }}
         <a
@@ -227,6 +271,33 @@ async function onToggleDiscovery(val) {
         <el-button type="primary" :loading="authSaving" @click="saveAuth">保存</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="rsDialog" title="深度相机采集器（rs-pipe）" width="480px">
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item label="采集器路径">
+          <el-input v-model="rsBinInput" placeholder="如 D:\tools\rs-pipe.exe；留空表示从 PATH 查找 rs-pipe" />
+        </el-form-item>
+      </el-form>
+      <el-alert
+        v-if="rsStatus && !rsStatus.bin_available"
+        type="warning" :closable="false" show-icon class="rs-dialog-alert"
+        title="采集器不可用"
+        :description="rsStatus.hint || '请确认路径正确，或按 README 编译真机版（需 librealsense SDK）'"
+      />
+      <div v-if="rsStatus && rsStatus.bin_available" class="rs-dialog-status">
+        <template v-if="rsStatus.devices && rsStatus.devices.length">
+          <div v-for="d in rsStatus.devices" :key="d.serial" class="rs-device-row">
+            <el-tag type="success" size="small">{{ d.name }}</el-tag>
+            <span class="rs-serial">SN {{ d.serial }}</span>
+          </div>
+        </template>
+        <span v-else class="rs-muted">采集器可用，未检测到 RealSense 设备</span>
+      </div>
+      <template #footer>
+        <el-button @click="rsDialog = false">关闭</el-button>
+        <el-button :loading="rsChecking" @click="checkRs">检测</el-button>
+        <el-button type="primary" :loading="rsSaving" @click="saveRs">保存</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -254,5 +325,22 @@ async function onToggleDiscovery(val) {
 }
 .gh-link:hover {
   text-decoration: underline;
+}
+.rs-dialog-alert {
+  margin-bottom: 8px;
+}
+.rs-device-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.rs-serial {
+  font-size: 12px;
+  color: #909399;
+}
+.rs-muted {
+  font-size: 13px;
+  color: #909399;
 }
 </style>

@@ -8,7 +8,7 @@ defineProps({
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['add', 'refresh', 'edit', 'snapshot', 'ptz', 'remove'])
+const emit = defineEmits(['add', 'refresh', 'edit', 'snapshot', 'ptz', 'remove', 'edit-mosaic', 'remove-mosaic'])
 
 const TYPE_META = {
   v4l2: { label: '本地摄像头', tag: 'primary' },
@@ -183,6 +183,23 @@ async function copyRTSP(row) {
               confirm-button-text="确定"
               cancel-button-text="取消"
               @confirm="emit('remove', row)"
+            >
+              <template #reference>
+                <el-button link type="danger">
+                  <el-icon><Delete /></el-icon>删除
+                </el-button>
+              </template>
+            </el-popconfirm>
+          </template>
+          <template v-else>
+            <el-button link type="primary" @click="emit('edit-mosaic', row)">
+              <el-icon><Edit /></el-icon>编辑
+            </el-button>
+            <el-popconfirm
+              title="确定删除该融合布局？合成流与推流会话将一并停止。"
+              confirm-button-text="删除"
+              cancel-button-text="取消"
+              @confirm="emit('remove-mosaic', row)"
             >
               <template #reference>
                 <el-button link type="danger">
