@@ -132,7 +132,7 @@ jobs:
         include:
           - { label: linux-amd64, os: ubuntu-24.04 }
           - { label: linux-arm64, os: ubuntu-24.04-arm }
-          - { label: darwin-universal, os: macos-14 }
+          - { label: darwin-arm64, os: macos-14 }
           - { label: windows-amd64, os: windows-latest }
     runs-on: ${{ matrix.os }}
     env:
@@ -151,59 +151,61 @@ jobs:
         run: |
           set -euo pipefail
           RSUSB=ON
-          ARCH_FLAGS=""
           if [ "$RUNNER_OS" = "macOS" ]; then
-            # macOS 用系统默认后端（不依赖 libusb——brew 依赖是单架构的，
-            # 会挡住通用库构建）；通用静态库同时覆盖 arm64 与 x86_64。
+            # macOS 用系统默认后端（不依赖 libusb，brew 依赖是单架构的）。
+            # 只出 arm64：fastcdr 在 x86_64 slice 有 long double 编译老坑，
+            # Intel Mac 请按 README 自行编译。
             RSUSB=OFF
-            ARCH_FLAGS='-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
           else
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends cmake build-essential libusb-1.0-0-dev
           fi
           git clone --depth 1 --branch "${LIBREALSENSE_VERSION}" https://github.com/IntelRealSense/librealsense.git /tmp/rs
-          # shellcheck disable=SC2086
           cmake -S /tmp/rs -B /tmp/rs/build \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_GRAPHICAL_EXAMPLES=OFF \
-            -DBUILD_UNIT_TESTS=OFF \
+            -DBUILD_UNIT_TESTS=OFF -DBUILD_GLSL_EXTENSIONS=OFF \
             -DFORCE_RSUSB_BACKEND=${RSUSB} \
-            -DCMAKE_BUILD_TYPE=Release ${ARCH_FLAGS}
+            -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/rs/build --parallel "$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
           sudo cmake --install /tmp/rs/build
-          # 三件套（realsense2/rsutils/fastcdr）必须都在；不在就从构建树补齐。
-          sudo find /tmp/rs/build -name '*.a' -exec cp {} /usr/local/lib/ \; 2>/dev/null || true
-          ls -lh /usr/local/lib/librealsense2.a /usr/local/lib/librsutils.a /usr/local/lib/libfastcdr.a
+          # realsense-file 等捆绑三方库无条件编入且拆成多个 .a：
+          # 全部收集进专用目录，链接时整组喂给链接器（见下一步）。
+          sudo mkdir -p /opt/rs/lib
+          sudo find /tmp/rs/build -name '*.a' -exec cp {} /opt/rs/lib/ \; 2>/dev/null || true
+          ls -lh /opt/rs/lib/
+          RS_LIBS=$(ls /opt/rs/lib/*.a | sed 's|.*/lib|-l|; s|\.a$||' | tr '\n' ' ')
+          echo "RS_LIBS=${RS_LIBS}" >> "$GITHUB_ENV"
 
       - name: Build rs-pipe (linux)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           mkdir -p dist/pkg
+          # --start-group：静态库间互相引用（realsense2 ↔ realsense-file ↔ sqlite/zstd…），
+          # 交由链接器迭代解析；C++ 运行时静态打入，产物单文件零依赖。
           CGO_ENABLED=1 \
-          CGO_CFLAGS="-I/usr/local/include/librealsense2" \
-          CGO_LDFLAGS="-L/usr/local/lib -lrealsense2 -lrsutils -lfastcdr -lstdc++ -static-libstdc++ -static-libgcc -lusb-1.0 -lpthread -lm" \
+          CGO_CFLAGS="-I/tmp/rs/include" \
+          CGO_LDFLAGS="-L/opt/rs/lib -Wl,--start-group ${RS_LIBS} -Wl,--end-group -lstdc++ -static-libstdc++ -static-libgcc -lusb-1.0 -lpthread -lm" \
             go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
           cp LICENSE README.md dist/pkg/
           NAME="rs-pipe_linux_$( [ '${{ matrix.label }}' = 'linux-amd64' ] && echo amd64 || echo arm64 )"
           (cd dist/pkg && tar -czf "../${NAME}.tar.gz" .)
           rm -rf dist/pkg
 
-      - name: Build rs-pipe (darwin, 双架构)
+      - name: Build rs-pipe (darwin)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          for ARCH in arm64 amd64; do
-            mkdir -p dist/pkg
-            CGO_ENABLED=1 GOARCH="${ARCH}" \
-            CGO_CFLAGS="-arch ${ARCH} -I/usr/local/include/librealsense2" \
-            CGO_LDFLAGS="-arch ${ARCH} -L/usr/local/lib -lrealsense2 -lrsutils -lfastcdr -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit" \
-              go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
-            cp LICENSE README.md dist/pkg/
-            (cd dist/pkg && tar -czf "../rs-pipe_darwin_${ARCH}.tar.gz" .)
-            rm -rf dist/pkg
-          done
-          ls -lh dist/
+          mkdir -p dist/pkg
+          # Apple ld 无 --start-group：按"被依赖者在后"排序 + 整组重复一遍消环。
+          CGO_ENABLED=1 \
+          CGO_CFLAGS="-I/tmp/rs/include" \
+          CGO_LDFLAGS="-L/opt/rs/lib -lrealsense2 ${RS_LIBS//-lrealsense2 /} ${RS_LIBS} -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit" \
+            go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
+          cp LICENSE README.md dist/pkg/
+          (cd dist/pkg && tar -czf "../rs-pipe_darwin_arm64.tar.gz" .)
+          rm -rf dist/pkg
 
       # ---- Windows：MSVC 源码构建。Intel SDK 自解压包是 InstallShield 套娃，
       #      7z 只能剥出图标资源拿不到 .lib，故弃用；runner 自带 VS。----
@@ -228,15 +230,24 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          choco install mingw -y --no-progress | Out-Null
+          # cgo 只支持 gcc/clang 驱动（CC=cl 会注入 gcc 风格参数报 D8021）；
+          # 但 gcc(ld) 可直接链 MSVC 产出的 COFF import lib——本仓库 README
+          # 的真机配方正是这条路。cgo 路径必须正斜杠。
           $inc = "$($env:RUNNER_TEMP)\rs\include" -replace '\\','/'
-          $lib = "$($env:RUNNER_TEMP)\rs\build\Release\realsense2.lib" -replace '\\','/'
+          $libdir = "$($env:RUNNER_TEMP)\rs\build\Release" -replace '\\','/'
           New-Item -ItemType Directory -Force dist/pkg | Out-Null
           $env:CGO_ENABLED = '1'
-          $env:CC = 'cl.exe'
+          $env:CC = 'gcc.exe'
           $env:CGO_CFLAGS = "-I$inc"
-          $env:CGO_LDFLAGS = $lib
+          $env:CGO_LDFLAGS = "-L$libdir -lrealsense2"
           go build -tags realsense -trimpath -ldflags '-s -w' -o dist/pkg/rs-pipe.exe ./cmd/rs-pipe
           Copy-Item "$($env:RUNNER_TEMP)\rs\build\Release\realsense2.dll" dist/pkg/
+          # MSVC 产物的 VC 运行时一并入包，目标机免装 VC Redist。
+          foreach ($d in 'vcruntime140.dll','msvcp140.dll','vcruntime140_1.dll') {
+            $src = "C:\Windows\System32\$d"
+            if (Test-Path $src) { Copy-Item $src dist/pkg/ }
+          }
           Copy-Item LICENSE,README.md dist/pkg/
           Compress-Archive -Path dist/pkg/* -DestinationPath dist/rs-pipe_windows_amd64.zip
           Remove-Item dist/pkg -Recurse -Force
