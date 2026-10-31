@@ -156,7 +156,7 @@ jobs:
             /opt/rs/lib
             /usr/local/lib/libusb-1.0.a
             /tmp/rs/include
-          key: rslibs-${{ runner.os }}-${{ runner.arch }}-${{ env.LIBREALSENSE_VERSION }}-v3
+          key: rslibs-${{ runner.os }}-${{ runner.arch }}-${{ env.LIBREALSENSE_VERSION }}-v4
 
       # ---- Linux/macOS：源码静态编译 librealsense ----
       - name: Build librealsense (static)
@@ -183,10 +183,15 @@ jobs:
             sudo apt-get install -y --no-install-recommends cmake build-essential libusb-1.0-0-dev
           fi
           git clone --depth 1 --branch "${LIBREALSENSE_VERSION}" https://github.com/IntelRealSense/librealsense.git /tmp/rs
+          # ENABLE_STATS 默认 ON，会拉起 libcurl+OpenSSL（遥测上报）；
+          # BUILD_ROSBAG2 默认 ON，拖进 rosbag/sqlite/zstd 全家桶——采集器
+          # 都用不上，全关：少依赖、快构建、无遥测。
           cmake -S /tmp/rs -B /tmp/rs/build \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_GRAPHICAL_EXAMPLES=OFF \
             -DBUILD_UNIT_TESTS=OFF -DBUILD_GLSL_EXTENSIONS=OFF \
+            -DENABLE_STATS=OFF -DCHECK_FOR_UPDATES=OFF -DENABLE_AI_ASSISTANT=OFF \
+            -DBUILD_ROSBAG2=OFF \
             -DFORCE_RSUSB_BACKEND=${RSUSB} \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/rs/build --parallel "$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
@@ -199,11 +204,16 @@ jobs:
           RS_LIBS=$(ls /opt/rs/lib/*.a | sed 's|.*/lib|-l|; s|\.a$||' | tr '\n' ' ')
           echo "RS_LIBS=${RS_LIBS}" >> "$GITHUB_ENV"
 
-      # 缓存命中时编译步骤被跳过，这里统一重算链接旗标。
+      # 缓存命中时编译步骤被跳过，这里统一重算链接旗标；
+      # linux 的 libusb（系统包）随编译步骤安装，命中时也要补装。
       - name: Prepare link flags
         if: runner.os != 'Windows'
         run: |
           set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends libusb-1.0-0-dev >/dev/null
+          fi
           ls -lh /opt/rs/lib/ | head -20
           RS_LIBS=$(ls /opt/rs/lib/*.a | sed 's|.*/lib|-l|; s|\.a$||' | tr '\n' ' ')
           echo "RS_LIBS=${RS_LIBS}" >> "$GITHUB_ENV"
