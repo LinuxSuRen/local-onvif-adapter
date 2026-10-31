@@ -210,7 +210,7 @@ jobs:
           # Apple ld 无 --start-group：按"被依赖者在后"排序 + 整组重复一遍消环。
           CGO_ENABLED=1 \
           CGO_CFLAGS="-I/tmp/rs/include" \
-          CGO_LDFLAGS="-L/opt/rs/lib -lrealsense2 ${RS_LIBS//-lrealsense2 /} ${RS_LIBS} -L/usr/local/lib -lusb-1.0 -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit" \
+          CGO_LDFLAGS="-L/opt/rs/lib -lrealsense2 ${RS_LIBS//-lrealsense2 /} ${RS_LIBS} -L/usr/local/lib -lusb-1.0 -lc++ -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit -framework Security" \
             go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
           cp LICENSE README.md dist/pkg/
           (cd dist/pkg && tar -czf "../rs-pipe_darwin_arm64.tar.gz" .)
