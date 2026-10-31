@@ -108,3 +108,149 @@ jobs:
           echo "上传以下资产到 Release ${TAG}:"
           ls -lh dist/
           gh release upload "${TAG}" dist/*.tar.gz dist/*.zip dist/checksums.txt --clobber
+
+  # 深度相机采集器 rs-pipe：cgo + librealsense，无法与主程序一起交叉编译，
+  # 按平台原生 runner 构建（Linux/macOS 源码静态编译 + RSUSB 后端免 udev；
+  # Windows 用 Intel SDK + MinGW，包内附 realsense2.dll）。
+  # 干净环境直接从 Release 下载对应平台包，无需本地装 SDK。
+  rs-pipe:
+    name: rs-pipe (${{ matrix.goos }}/${{ matrix.goarch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { os: macos-13, goos: darwin, goarch: amd64 }
+          - { os: macos-14, goos: darwin, goarch: arm64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      LIBREALSENSE_VERSION: v2.59.1
+      WIN_SDK_EXE: RealSense.SDK-WIN10-2.59.1.11053.exe
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      # ---- Linux/macOS：源码静态编译 librealsense（RSUSB 后端，免 udev 规则）----
+      - name: Build librealsense (static, RSUSB)
+        if: matrix.goos != 'windows'
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install cmake libusb
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends cmake build-essential libusb-1.0-0-dev libssl-dev
+          fi
+          git clone --depth 1 --branch "${LIBREALSENSE_VERSION}" https://github.com/IntelRealSense/librealsense.git /tmp/rs
+          cmake -S /tmp/rs -B /tmp/rs/build \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+            -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_STATIC_CRT=OFF \
+            -DFORCE_RSUSB_BACKEND=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/rs/build --parallel "$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
+          sudo cmake --install /tmp/rs/build
+          ls -lh /usr/local/lib/librealsense2.a /usr/local/include/librealsense2/rs.h
+
+      - name: Build rs-pipe (linux/darwin)
+        if: matrix.goos != 'windows'
+        run: |
+          set -euo pipefail
+          EXTRA_LDFLAGS="-lusb-1.0 -lpthread -lm"
+          if [ "${{ matrix.goos }}" = "darwin" ]; then
+            EXTRA_LDFLAGS="-lusb-1.0 -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit"
+          fi
+          mkdir -p dist/pkg
+          CGO_ENABLED=1 \
+          CGO_CFLAGS="-I/usr/local/include/librealsense2" \
+          CGO_LDFLAGS="-L/usr/local/lib -lrealsense2 ${EXTRA_LDFLAGS}" \
+            go build -tags realsense -trimpath -ldflags "-s -w" -o dist/pkg/rs-pipe ./cmd/rs-pipe
+          cp LICENSE README.md dist/pkg/
+          NAME="rs-pipe_${{ matrix.goos }}_${{ matrix.goarch }}"
+          (cd dist/pkg && tar -czf "../${NAME}.tar.gz" .)
+          echo "ARTIFACT=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      # ---- Windows：Intel SDK（自解压包）+ MinGW，包内附 realsense2.dll ----
+      - name: Prepare librealsense SDK
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          curl.exe -L --retry 5 -o sdk.exe "https://github.com/IntelRealSense/librealsense/releases/download/${env:LIBREALSENSE_VERSION}/${env:WIN_SDK_EXE}"
+          7z x sdk.exe -osdk | Out-Null
+          $lib = Get-ChildItem sdk -Recurse -Filter realsense2.lib | Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $lib) { $lib = Get-ChildItem sdk -Recurse -Filter realsense2.lib | Select-Object -First 1 }
+          $dll = Get-ChildItem sdk -Recurse -Filter realsense2.dll | Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem sdk -Recurse -Filter realsense2.dll | Select-Object -First 1 }
+          $inc = Get-ChildItem sdk -Recurse -Directory -Filter include | Select-Object -First 1
+          "SDK_LIB=$($lib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SDK_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SDK_INC=$($inc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build rs-pipe (windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install mingw -y --no-progress | Out-Null
+          # cgo 路径必须正斜杠（README 深度相机章节的坑）
+          $inc = $env:SDK_INC -replace '\\','/'
+          $libdir = (Split-Path $env:SDK_LIB -Parent) -replace '\\','/'
+          New-Item -ItemType Directory -Force dist/pkg | Out-Null
+          $env:CGO_ENABLED = '1'
+          $env:CC = 'gcc.exe'
+          $env:CGO_CFLAGS = "-I$inc"
+          $env:CGO_LDFLAGS = "-L$libdir -lrealsense2"
+          go build -tags realsense -trimpath -ldflags '-s -w' -o dist/pkg/rs-pipe.exe ./cmd/rs-pipe
+          Copy-Item $env:SDK_DLL dist/pkg/realsense2.dll
+          Copy-Item LICENSE,README.md dist/pkg/
+          Compress-Archive -Path dist/pkg/* -DestinationPath dist/rs-pipe_windows_amd64.zip
+          "ARTIFACT=dist/rs-pipe_windows_amd64.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Smoke test rs-pipe
+        if: matrix.goos != 'windows'
+        run: |
+          set -euo pipefail
+          tar -xzf "${ARTIFACT}" -C dist/pkg
+          file ./dist/pkg/rs-pipe
+          # 无相机环境：list 应正常退出（枚举 0 台），fake 模式应能拉起并保持运行。
+          ./dist/pkg/rs-pipe list
+          set +e
+          timeout 5 ./dist/pkg/rs-pipe serve --port 18099 --fake >/dev/null 2>&1
+          code=$?
+          set -e
+          [ "$code" -eq 124 ] || { echo "fake serve exited $code (expect 124=timeout-killed, i.e. still running)"; exit 1; }
+
+      - name: Smoke test rs-pipe (windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive dist/rs-pipe_windows_amd64.zip -DestinationPath dist/smoke -Force
+          # 二进制能加载 realsense2.dll 并完成一次无设备枚举即通过。
+          & dist/smoke/rs-pipe.exe list
+          "list exit: $LASTEXITCODE"
+
+      # 手动触发（测试流水线用）：产物挂到 workflow artifact；Release 事件：上传到该 Release。
+      - name: Upload to workflow artifacts
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rs-pipe_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/rs-pipe_*
+
+      - name: Upload to the Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh "${ARTIFACT}"
+          gh release upload "${TAG}" "${ARTIFACT}" --clobber
