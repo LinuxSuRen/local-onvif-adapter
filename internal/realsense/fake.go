@@ -141,7 +141,7 @@ func (s *FakeSource) render(n int64) FrameSet {
 			depth[y*w+x] = uint16(d)
 		}
 	}
-	if err := ApplyColorMap(depth, w, h, rgb, minD, maxD); err != nil {
+	if err := ApplyColorMapScaled(depth, w, h, rgb, minD, maxD); err != nil {
 		// 长度均按 w*h 分配，不会走到这里。
 		panic(err)
 	}

@@ -7,6 +7,7 @@ import CameraTable from './components/CameraTable.vue'
 import CameraDialog from './components/CameraDialog.vue'
 import SnapshotDialog from './components/SnapshotDialog.vue'
 import PtzDrawer from './components/PtzDrawer.vue'
+import MosaicPanel from './components/MosaicPanel.vue'
 
 const system = ref(null)
 const cameras = ref([])
@@ -105,6 +106,8 @@ async function handleRemove(camera) {
     <CameraDialog v-model:visible="dialogVisible" :camera="editingCamera" @saved="loadAll" />
     <SnapshotDialog v-model:visible="snapshotVisible" :camera="snapshotCamera" />
     <PtzDrawer v-model:visible="ptzVisible" :camera="ptzCamera" />
+
+    <MosaicPanel class="block" @updated="loadAll" />
   </div>
 </template>
 

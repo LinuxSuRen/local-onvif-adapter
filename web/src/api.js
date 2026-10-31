@@ -121,3 +121,31 @@ export function getRealsenseSettings() {
 export function updateRealsenseSettings(bin) {
   return request('/api/realsense/settings', { method: 'PUT', body: { realsense_bin: bin } })
 }
+
+// ---- 融合布局 ----
+
+export function getMosaics() {
+  return request('/api/mosaics')
+}
+
+export function createMosaic(mosaic) {
+  return request('/api/mosaics', { method: 'POST', body: mosaic })
+}
+
+export function updateMosaic(id, mosaic) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}`, { method: 'PUT', body: mosaic })
+}
+
+export function deleteMosaic(id) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function startMosaicPush(id, target) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}/push`, { method: 'POST', body: { target } })
+}
+
+export function stopMosaicPush(id, token) {
+  return request(`/api/mosaics/${encodeURIComponent(id)}/push/${encodeURIComponent(token)}`, {
+    method: 'DELETE'
+  })
+}

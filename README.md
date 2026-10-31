@@ -99,6 +99,40 @@ ffplay rtsp://admin:密码@<本机IP>:8554/cam/<摄像头ID>
 冷启动 1~3 秒。详细设计与 controller 侧双模式自适应方案见
 [docs/push-stream-design.md](docs/push-stream-design.md)。
 
+## 融合布局（多画面合成与整流推送）
+
+把多个摄像头的画面按自定义布局拼到一张画布，**合成单路 H.264 流**对外输出：
+本地 `rtsp://host:8554/cam/<布局ID>`（作为普通通道被 NVR/ONVIF 客户端拉流），
+并可同时 `tee` 直推多个远端目标（rtsp/rtmp/srt，复用按需直推的目标校验与脱敏）。
+管理台「融合布局」面板可视化编辑：从摄像头列表添加画面，画布上**拖拽移动、
+拖角缩放**（网格吸附 + 像素级微调），快照轮询预览，保存后即生效。
+
+```
+画面格(cell) ──ffmpeg 中继──▶ rawvideo 定长帧 ──┐
+画面格(cell) ──ffmpeg 中继──▶ rawvideo 定长帧 ──┼─▶ Go 拼画布 ──▶ 编码 ffmpeg ──▶ tee 输出
+（断流格自动铺黑帧）                            ┘   (stdin 管道)     ├ /cam/<布局ID> 本地
+                                                                     └ rtsp/rtmp/srt 远端
+```
+
+- **断流策略**（创建时可选）：
+  - `blackframe`（默认）：每格独立中继拉本地回环流，断流只黑对应格、整流不断；
+    格级健康度（画面正常/中断）在 UI 与 `/api/mosaics` 状态里可见
+  - `restart`：单 ffmpeg `filter_complex` 一次成型（黑底画布 + overlay 链），
+    进程少但任一路断流整流重启（中断数秒）
+- **虚拟通道**：每个布局自动在摄像头列表生成一条 `mosaic` 类型通道——
+  ONVIF profile、`GetStreamUri`、快照、RTSP 地址全套复用，NVR 直接拉合成流；
+  该通道只能经融合布局面板管理，摄像头接口对它只读
+- **画面格**：坐标为画布绝对像素（服务端统一向下偶数对齐，yuv420 要求），
+  最多 16 格、格序即叠放顺序；引用的摄像头被删除/禁用时该格自动铺黑帧，布局不破坏
+- **音频**：可选单源（取某路摄像头的音轨转 AAC），不做混音
+- **布局变更即重启**：ffmpeg 命令行无法运行中变更，布局保存后合成流重启
+  （前端 800ms 防抖，拖拽结束才落一次）；推流会话在内存中持有（凭证不落盘），
+  合成进程连续短命失败达预算即摘除会话并发布 `lns:Push/Failed`，回到本地-only
+- **能力宣告**：WS-Discovery 携带 `onvif://www.linuxsuren.com/feature/mosaic`
+
+资源提示：合成需像素域解码 N 路再编码 1 路，画面格按格尺寸配置低分辨率源
+（如四分屏用子码流），总像素不超过画布即可在中等 CPU 上稳定运行。
+
 ## 快速开始
 
 ### 容器运行（Windows / macOS / Linux）
@@ -307,6 +341,10 @@ ONVIF profile 同步声明 `AudioEncoderConfiguration`）：
 - 防火墙首启放行：UDP 3702（WS-Discovery 自动发现）与 UDP 8000/8001
   （RTSP over UDP，不放行也不影响 TCP 拉流）
 - 老摄像头只输出 MJPEG/YUYV 原始格式也没关系，统一转码 H264
+- **多屏采集与显示拓扑变化**：屏幕摄像头按配置时刻的虚拟桌面坐标定位显示器；
+  RDP 接管、扩展坞/显示器断开等使坐标越出当前虚拟桌面时，该路采集自动**挂起等待**
+  （日志与 UI 状态给出"等待显示恢复"与具体坐标差异，不再无限重启刷屏），
+  显示器恢复后数秒内自动续采。远程桌面场景可在客户端勾选"使用所有监视器"
 
 ## ONVIF 覆盖清单
 
@@ -331,6 +369,10 @@ ONVIF profile 同步声明 `AudioEncoderConfiguration`）：
 | PUT / DELETE | `/api/cameras/{id}` | 更新 / 删除 |
 | GET | `/api/cameras/{id}/snapshot` | 抓拍 JPEG |
 | GET / POST | `/api/cameras/{id}/ptz` | 云台状态 / 试控（continuous、stop、absolute、preset_set、preset_goto、preset_remove、home_set、home_goto） |
+| GET / POST | `/api/mosaics` | 融合布局列表（含运行状态/格健康度/推流会话）/ 新增（body `{"name","width","height","framerate","bitrate_kbps","loss_policy","cells":[{camera_id,x,y,w,h}],"audio_camera_id","enabled"}`） |
+| PUT / DELETE | `/api/mosaics/{id}` | 更新布局（整量替换 cells）/ 删除（虚拟通道一并移除） |
+| POST | `/api/mosaics/{id}/push` | 开始整流直推（body `{"target":"rtsp://..."}`，返回 token；会话内存态，凭证不落盘） |
+| DELETE | `/api/mosaics/{id}/push/{token}` | 停止整流直推 |
 | GET | `/onvif/snapshot/{profileToken}` | `GetSnapshotUri` 指向的公开快照地址 |
 | GET | `/healthz` | 健康检查 |
 
@@ -361,7 +403,8 @@ http://<local-onvif-adapter 所在机器IP>:8080/onvif/device_service
 │   ├── ptzmock/              # 虚拟云台状态机
 │   ├── rtspserver/           # 内嵌 RTSP 服务器（gortsplib，多读者分发）
 │   ├── snapshot/             # ffmpeg 抓帧（带短缓存）
-│   └── stream/               # ffmpeg 取流进程监督（退避重启）
+│   └── stream/               # ffmpeg 取流进程监督（退避重启）+ 融合流合成
+│                             #  （mosaic.go 管理与 restart 模式 / mosaicpipe.go blackframe 兜底）
 ├── web/                      # Vue3 管理台（构建产物内嵌）
 ├── Dockerfile                # 多阶段：node 构建前端 → go 构建后端 → alpine+ffmpeg
 ├── docker-compose.yml        # 单容器双模式：host 网络（默认）/ bridge（--profile bridge，Win/mac）
