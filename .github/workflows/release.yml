@@ -170,9 +170,10 @@ jobs:
         if: matrix.goos != 'windows'
         run: |
           set -euo pipefail
-          EXTRA_LDFLAGS="-lusb-1.0 -lpthread -lm"
+          # librealsense 是 C++ 库：静态链接必须带 C++ 运行时（linux: libstdc++ / mac: libc++）。
+          EXTRA_LDFLAGS="-lstdc++ -lusb-1.0 -lpthread -lm"
           if [ "${{ matrix.goos }}" = "darwin" ]; then
-            EXTRA_LDFLAGS="-lusb-1.0 -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit"
+            EXTRA_LDFLAGS="-lc++ -lusb-1.0 -lpthread -lm -framework CoreFoundation -framework IOKit -framework CoreVideo -framework AppKit"
           fi
           mkdir -p dist/pkg
           CGO_ENABLED=1 \
@@ -191,15 +192,26 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           curl.exe -L --retry 5 -o sdk.exe "https://github.com/IntelRealSense/librealsense/releases/download/${env:LIBREALSENSE_VERSION}/${env:WIN_SDK_EXE}"
+          # SDK 自解压包是多层容器（exe → msi → 内嵌文件），逐层剥到找到库为止。
           7z x sdk.exe -osdk | Out-Null
+          for ($round = 0; $round -lt 3; $round++) {
+            if (Get-ChildItem sdk -Recurse -Filter realsense2.lib -ErrorAction SilentlyContinue) { break }
+            $inner = Get-ChildItem sdk -Recurse -Include *.msi,*.cab -ErrorAction SilentlyContinue
+            if (-not $inner) { break }
+            foreach ($f in $inner) { 7z x "$($f.FullName)" -o"$($f.DirectoryName)/x" | Out-Null }
+          }
           $lib = Get-ChildItem sdk -Recurse -Filter realsense2.lib | Where-Object FullName -match 'x64' | Select-Object -First 1
           if (-not $lib) { $lib = Get-ChildItem sdk -Recurse -Filter realsense2.lib | Select-Object -First 1 }
           $dll = Get-ChildItem sdk -Recurse -Filter realsense2.dll | Where-Object FullName -match 'x64' | Select-Object -First 1
           if (-not $dll) { $dll = Get-ChildItem sdk -Recurse -Filter realsense2.dll | Select-Object -First 1 }
           $inc = Get-ChildItem sdk -Recurse -Directory -Filter include | Select-Object -First 1
-          "SDK_LIB=$($lib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SDK_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SDK_INC=$($inc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if (-not $lib -or -not $dll -or -not $inc) {
+            Get-ChildItem sdk -Recurse -File | Select-Object -First 40 | ForEach-Object { $_.FullName }
+            throw "realsense2.lib/dll/include not found after extraction"
+          }
+          Add-Content $env:GITHUB_ENV "SDK_LIB=$($lib.FullName)"
+          Add-Content $env:GITHUB_ENV "SDK_DLL=$($dll.FullName)"
+          Add-Content $env:GITHUB_ENV "SDK_INC=$($inc.FullName)"
 
       - name: Build rs-pipe (windows)
         if: matrix.goos == 'windows'
