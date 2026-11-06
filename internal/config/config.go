@@ -23,13 +23,14 @@ const (
 	TypeTestSrc      CameraType = "testsrc"      // ffmpeg 测试彩条，无需真实摄像头
 	TypeRpicam       CameraType = "rpicam"       // 树莓派 CSI 摄像头（rpicam-vid/libcamera 管线，硬件编码零转码）
 	TypeRealSense    CameraType = "realsense"    // RealSense 深度相机一路流（rs-pipe 分发的 rawvideo TCP 流）
+	TypeUnitreeA2    CameraType = "unitree_a2"   // 宇树 A2 机器狗前摄（SSH 到机载 PC 轮询 SDK2 videohub 取 JPEG 帧流）
 	TypeMosaic       CameraType = "mosaic"       // 融合布局虚拟通道（由 mosaics 配置派生：多路画面合成单路流，不直接取流）
 )
 
 // Valid 校验来源类型是否合法。
 func (t CameraType) Valid() bool {
 	switch t {
-	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam, TypeRealSense, TypeMosaic:
+	case TypeV4L2, TypeAVFoundation, TypeDShow, TypeScreen, TypeRTSP, TypeTestSrc, TypeRpicam, TypeRealSense, TypeUnitreeA2, TypeMosaic:
 		return true
 	default:
 		return false
@@ -194,14 +195,14 @@ func (s Server) AuthCreds() (user, pass string, ok bool) {
 
 // Root 配置文件根节点。
 type Root struct {
-	Server       Server    `json:"server"`
-	Manufacturer string    `json:"manufacturer"`
-	Model        string    `json:"model"`
-	Firmware     string    `json:"firmware"`
-	Serial       string    `json:"serial"` // 设备序列号，首次生成后持久化
-	NextID       int       `json:"next_id"`
-	Cameras      []Camera  `json:"cameras"`
-	Mosaics      []Mosaic  `json:"mosaics"`
+	Server       Server   `json:"server"`
+	Manufacturer string   `json:"manufacturer"`
+	Model        string   `json:"model"`
+	Firmware     string   `json:"firmware"`
+	Serial       string   `json:"serial"` // 设备序列号，首次生成后持久化
+	NextID       int      `json:"next_id"`
+	Cameras      []Camera `json:"cameras"`
+	Mosaics      []Mosaic `json:"mosaics"`
 }
 
 // Default 返回默认配置。

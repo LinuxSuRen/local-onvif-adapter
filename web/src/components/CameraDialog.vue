@@ -41,6 +41,7 @@ const MODE_OPTIONS = [
   { value: 'realsense', label: '深度相机' },
   { value: 'mosaic', label: '融合布局' },
   { value: 'rtsp', label: '网络摄像头（RTSP）' },
+  { value: 'unitree_a2', label: '宇树 A2' },
   { value: 'rpicam', label: '树莓派 CSI 摄像头' },
   { value: 'testsrc', label: '测试彩条' }
 ]
@@ -211,6 +212,16 @@ watch(mode, (m) => {
     }
     if (!form.name.trim()) form.name = 'RealSense'
   }
+  if (m === 'unitree_a2') {
+    form.type = 'unitree_a2'
+    form.source = '' // 本类型只在本机直采，源必须留空
+    if (!form.name.trim()) form.name = '宇树 A2 前摄'
+    // 前摄固定几何：默认补齐，保证 ONVIF profile 声明与实际流一致。
+    if (!form.width && !form.height) {
+      form.width = 1920
+      form.height = 1080
+    }
+  }
   if (m === 'local' && !form.type) form.type = defaultLocalType.value
   nextTick(() => formRef.value && formRef.value.clearValidate('source'))
 })
@@ -225,7 +236,7 @@ const rules = {
   source: [
     {
       validator: (rule, value, callback) => {
-        if (mode.value === 'testsrc' || mode.value === 'realsense' || mode.value === 'mosaic') return callback()
+        if (mode.value === 'testsrc' || mode.value === 'realsense' || mode.value === 'mosaic' || mode.value === 'unitree_a2') return callback()
         if (!value || !String(value).trim()) {
           return callback(new Error(mode.value === 'local' || mode.value === 'screen' ? '请选择设备' : '请输入源'))
         }
@@ -341,7 +352,7 @@ async function handleSave() {
   const body = {
     name: form.name.trim(),
     type,
-    source: mode.value === 'testsrc' ? '' : form.source.trim(),
+    source: mode.value === 'testsrc' || mode.value === 'unitree_a2' ? '' : form.source.trim(),
     width: form.width,
     height: form.height,
     framerate: form.framerate,
@@ -460,11 +471,14 @@ async function handleSave() {
       <el-form-item v-else-if="mode !== 'local' && mode !== 'screen' && mode !== 'mosaic'" label="源" prop="source">
         <el-input
           v-model="form.source"
-          :disabled="mode === 'testsrc'"
+          :disabled="mode === 'testsrc' || mode === 'unitree_a2'"
           :placeholder="SOURCE_PLACEHOLDER[mode]"
         />
         <div v-if="mode === 'realsense'" class="form-tip">
           源为采集器分发地址（彩色/深度/红外各一路），由"深度相机"一键添加自动生成，无需修改
+        </div>
+        <div v-if="mode === 'unitree_a2'" class="form-tip">
+          无需配置源：adapter 与机器人同机运行，经 Unitree SDK 本机直采前摄（1920×1080，约 10fps）后转码推流
         </div>
       </el-form-item>
       <el-form-item v-if="mode === 'realsense' && !camera" label="常用档位">
