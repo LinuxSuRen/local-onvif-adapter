@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -56,7 +57,8 @@ func (g *Generator) JPEG(cam config.Camera) ([]byte, error) {
 		return g.rpiStill(cam)
 	}
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	if !(cam.Type == config.TypeScreen && runtime.GOOS == "darwin") {
+	// macOS 屏幕与宇树 A2 源从 stdin 管道读帧（后者由本机取帧泵喂帧），不能加 -nostdin。
+	if !(cam.Type == config.TypeScreen && runtime.GOOS == "darwin") && cam.Type != config.TypeUnitreeA2 {
 		args = append(args, "-nostdin")
 	}
 	args = append(args, stream.InputArgs(cam)...)
@@ -66,6 +68,11 @@ func (g *Generator) JPEG(cam config.Camera) ([]byte, error) {
 		// screencapture 循环喂帧（与取流 Runner 同一命令），否则管道立即
 		// EOF——"pipe:: End of file" 即此路径缺失喂帧进程。
 		return g.capturedWithFeed(cam, args)
+	}
+	if cam.Type == config.TypeUnitreeA2 {
+		// 宇树 A2 直抓：InputArgs 为 image2pipe + pipe:，需本机取帧泵喂帧
+		//（与取流 Runner 同一机制）。
+		return g.capturedWithPumpFeed(cam, args)
 	}
 	return g.captured(cam.ID, args)
 }
@@ -110,9 +117,70 @@ func (g *Generator) storeFrame(key string, data []byte) error {
 		return fmt.Errorf("not a JPEG frame (%d bytes)", len(data))
 	}
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.cache[key] = cacheEntry{data: data, at: time.Now()}
-	g.mu.Unlock()
 	return nil
+}
+
+// capturedWithPumpFeed 在本机取帧泵喂 stdin 的条件下抓帧（宇树 A2 直采）：
+// 泵就绪即拿首帧退出，不需要等泵进程结束；超时由 ctx 兜底。
+func (g *Generator) capturedWithPumpFeed(cam config.Camera, args []string) ([]byte, error) {
+	g.mu.Lock()
+	if e, ok := g.cache[cam.ID]; ok && time.Since(e.at) < g.ttl {
+		g.mu.Unlock()
+		return e.data, nil
+	}
+	g.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	pr, pw, err := pipeWithPump(cam.FramerateOrDefault())
+	if err != nil {
+		return nil, err
+	}
+	defer pr.Close()
+
+	ffmpeg := exec.CommandContext(ctx, g.bin, args...) //nolint:gosec // 路径来自受控配置
+	ffmpeg.Stdin = pr
+	g.logger.Debug("capturing with unitree pump", "camera", cam.ID, "args", args)
+	data, err := ffmpeg.Output()
+	pw.close() // 抓帧完成即拆泵（关写端 + 终止泵进程）
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg capture failed: %w", err)
+	}
+	if err := g.storeFrame(cam.ID, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// pumpCloser 打包取帧泵与其管道写端：close 先关写端再终止泵进程，
+// 让脚本因 stdout 管道破裂退出。
+type pumpCloser struct {
+	pw   *os.File
+	pump *stream.UnitreePump
+}
+
+func (c pumpCloser) close() {
+	_ = c.pw.Close()
+	c.pump.Close()
+}
+
+// pipeWithPump 建立「本机取帧泵 → 管道写端」并返回读端与清理句柄。
+func pipeWithPump(fps int) (*os.File, pumpCloser, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, pumpCloser{}, fmt.Errorf("pipe: %w", err)
+	}
+	var diag bytes.Buffer
+	pump, err := stream.StartUnitreePump(fps, pw, &diag)
+	if err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return nil, pumpCloser{}, fmt.Errorf("宇树取帧泵: %w", err)
+	}
+	go func() { _ = pump.Wait(); _ = pw.Close() }() // 泵退出兜底关写端
+	return pr, pumpCloser{pw: pw, pump: pump}, nil
 }
 
 // rpiStill 用 rpicam-still 抓取一帧 JPEG（禁用预览与签名信息）。

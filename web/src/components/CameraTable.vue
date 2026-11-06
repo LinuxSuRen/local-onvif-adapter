@@ -19,6 +19,7 @@ const TYPE_META = {
   testsrc: { label: '测试彩条', tag: 'info' },
   rpicam: { label: 'CSI 摄像头', tag: 'info' },
   realsense: { label: 'RealSense', tag: 'info' },
+  unitree_a2: { label: '宇树 A2', tag: 'warning' },
   mosaic: { label: '融合布局', tag: 'danger' }
 }
 

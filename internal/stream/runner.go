@@ -340,6 +340,39 @@ func (r *Runner) Run() {
 			}
 		}
 
+		// 宇树 A2 前摄：本机 spawn python3 取帧泵（DDS GetImageSample → 连续
+		// JPEG），stdout 接到 ffmpeg 的 stdin（image2pipe）。泵退出时关闭管道
+		// 写端，ffmpeg 读到 EOF 退出，交由本监督循环退避重启整条链路。
+		if r.cam.Type == config.TypeUnitreeA2 {
+			pr, pw, pipeErr := os.Pipe()
+			if pipeErr == nil {
+				var pumpDiag tailBuffer
+				pump, startErr := StartUnitreePump(r.cam.FramerateOrDefault(), pw, &pumpDiag)
+				if startErr == nil {
+					cmd.Stdin = pr
+					defer func() {
+						pump.Close()
+						_ = pw.Close()
+						_ = pr.Close()
+					}()
+					go func() {
+						// 泵退出 → 关写端触发 ffmpeg EOF。
+						_ = pump.Wait()
+						_ = pw.Close()
+					}()
+				} else {
+					_ = pr.Close()
+					_ = pw.Close()
+					msg := startErr.Error()
+					if tail := strings.TrimSpace(pumpDiag.Tail()); tail != "" {
+						msg = msg + "; pump: " + tail
+					}
+					r.logger.Warn("unitree pump start failed（确认运行在机器人本机且 python3 可用）",
+						"camera", r.cam.ID, "err", msg)
+				}
+			}
+		}
+
 		r.logger.Debug("ffmpeg starting", "camera", r.cam.ID, "args", args)
 		// 先 Start 再发布 r.cmd：cmd.Process 字段由 Start 写入，若在 Run() 之前
 		// 发布，Stop() 在锁外读 cmd.Process 会与 Start 的写构成数据竞争
@@ -545,6 +578,10 @@ func InputArgs(c config.Camera) []string {
 	case config.TypeRpicam:
 		// rpicam-vid（libcamera）经 stdin 管道喂 H264 裸流，见 rpicamVidArgs。
 		args = append(args, "-f", "h264", "-i", "pipe:")
+	case config.TypeUnitreeA2:
+		// 本机取帧泵经 stdin 喂连续 JPEG 帧（见 unitree_pump.go），
+		// 帧自带分辨率（1920×1080），宽高配置由输出侧 scale 兜底。
+		args = append(args, "-f", "image2pipe", "-framerate", fmt.Sprintf("%d", fps), "-i", "pipe:")
 	case config.TypeRealSense:
 		// rs-pipe 分发的 rawvideo TCP 裸流（rgb24 定长帧，无容器头）。
 		// 分辨率/帧率声明必须与 rs-pipe 启动参数一致（默认 640x480@15）。
@@ -740,8 +777,9 @@ func buildArgs(c config.Camera, pushURL string, targets []string, bin string, lo
 		gov = 10
 	}
 	args := []string{"-hide_banner", "-loglevel", "error"}
-	// macOS 屏幕源与 rpicam 源需要从 stdin 管道读帧，不能加 -nostdin。
-	if !(c.Type == config.TypeScreen && runtime.GOOS == "darwin") && c.Type != config.TypeRpicam {
+	// macOS 屏幕源与 rpicam/宇树 A2 源需要从 stdin 管道读帧，不能加 -nostdin。
+	if !(c.Type == config.TypeScreen && runtime.GOOS == "darwin") &&
+		c.Type != config.TypeRpicam && c.Type != config.TypeUnitreeA2 {
 		args = append(args, "-nostdin")
 	}
 	args = append(args, InputArgs(c)...)
@@ -815,9 +853,11 @@ func audioEncodeArgs(c config.Camera) []string {
 	if c.Type == config.TypeV4L2 {
 		audioInputIdx = "1"
 	}
-	// 历史行为兜底：dshow/avfoundation 配置了音频开关但没选设备时按未启用处理。
+	// 历史行为兜底：dshow/avfoundation 配置了音频开关但没选设备时按未启用处理；
+	// 宇树 A2 源为纯视频（取帧泵无音轨），开关开着也按未启用处理。
 	enabled := c.AudioEnabled
-	if enabled && (c.Type == config.TypeDShow || c.Type == config.TypeAVFoundation) && strings.TrimSpace(c.AudioSource) == "" {
+	if enabled && (c.Type == config.TypeDShow || c.Type == config.TypeAVFoundation || c.Type == config.TypeUnitreeA2) &&
+		strings.TrimSpace(c.AudioSource) == "" {
 		enabled = false
 	}
 	if !enabled {

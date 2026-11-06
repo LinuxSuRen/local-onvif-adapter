@@ -235,6 +235,7 @@ go run .       # 或者直接跑（同样需本机 ffmpeg）
 | `rtsp` | 任意 | 手动填写 | `rtsp://user:pass@ip:554/stream` |
 | `rpicam` | 树莓派 | 无需选择（libcamera 默认摄像头） | 留空；多摄像头填 libcamera 索引 |
 | `realsense` | 任意（设备需 USB 直连） | 无需选择（rs-pipe 统一取三路） | `tcp://127.0.0.1:1802{0,1,2}` |
+| `unitree_a2` | 机器人机载 PC（同机部署） | 无需选择 | 留空（本机 SDK 直采） |
 | `testsrc` | 任意 | 无需设备 | 留空 |
 
 `rpicam` 类型走 **libcamera 管线**（`rpicam-vid`）：新版树莓派系统的 CSI 摄像头
@@ -327,6 +328,29 @@ ffplay -f rawvideo -pixel_format rgb24 -video_size 640x480 -framerate 15 \
 
 每个摄像头可配置分辨率（0 表示自动）、帧率、码率、是否红外、是否启用。
 枚举列表也支持手动输入设备源（高级场景）。
+
+### 宇树 A2 机器狗前摄（SDK 本机直采）
+
+宇树 A2 的机载摄像头**不出 RTSP**：机载 mediamtx 平台栈默认无人推流，原生
+`camera.service` 亦可能因固件目录缺失处于崩溃循环——但主控的 SDK2
+`videohub` 服务常驻机载 DDS 域（eth0），`GetImageSample` 单次 ~10ms 出
+1920×1080 JPEG。本类型面向 **adapter 与机器人同机部署**的形态，经 python3
+取帧泵（spawn 子进程，stdout 接 ffmpeg stdin）直采：
+
+```
+adapter（机载 PC 上）
+  ├─ python3 取帧泵（子进程，脚本经 stdin 现场投递、零落盘）
+  │    └─ Unitree SDK2 (DDS, eth0) 轮询 GetImageSample → 连续 JPEG
+  └─ ffmpeg image2pipe ← 管道 ← ─┘  转码 H264 → 内嵌 RTSP → ONVIF GetStreamUri
+```
+
+管理台「添加摄像头 → 宇树 A2」：**无需配置源**（本机直采），帧率建议 10
+（RPC 轮询实测约 10fps 稳定），分辨率留 0 自动补 1920×1080。
+
+机器人侧要求：系统 python3 带官方 `unitree_sdk2py`（固件自带，按 OTA 版本
+glob 自动探测）与 `cyclonedds` 包；ffmpeg 在 PATH 中（转码用）。断流自愈：
+泵进程退出 → 管道 EOF → ffmpeg 退出 → 监督器指数退避重建整条链路。
+快照在启用态从 RTSP 流拉帧，禁用态直连取帧泵抓首帧。
 
 ### 音频采集
 

@@ -174,6 +174,20 @@ func TestCameraCRUD(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("type validation: %d", code)
 	}
+	// 宇树 A2：空源合法，且自动补固定几何 1920×1080。
+	code, out = doJSON(t, "POST", ts.URL+"/api/cameras", `{"name":"a2","type":"unitree_a2","source":"","framerate":10,"enabled":false}`)
+	if code != 200 {
+		t.Fatalf("unitree empty source should be accepted: %d %v", code, out)
+	}
+	a2 := out["data"].(map[string]any)
+	if a2["width"] != float64(1920) || a2["height"] != float64(1080) {
+		t.Fatalf("unitree geometry defaults: %v×%v", a2["width"], a2["height"])
+	}
+	// 宇树 A2：非空源（如远程地址）应拒绝——本类型只支持本机直采。
+	code, _ = doJSON(t, "POST", ts.URL+"/api/cameras", `{"name":"a2","type":"unitree_a2","source":"192.168.124.162"}`)
+	if code != 400 {
+		t.Fatalf("unitree non-empty source should be rejected: %d", code)
+	}
 	// 删除。
 	code, _ = doJSON(t, "DELETE", ts.URL+"/api/cameras/cam1", "")
 	if code != 200 {

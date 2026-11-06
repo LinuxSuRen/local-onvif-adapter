@@ -309,8 +309,13 @@ func (in *cameraInput) validate() error {
 	if t == config.TypeRealSense && !strings.HasPrefix(in.Source, "tcp://") {
 		return badRequest("RealSense 源必须以 tcp:// 开头（rs-pipe 分发地址，如 tcp://127.0.0.1:18020）")
 	}
-	// testsrc 与 rpicam 的源可空（rpicam 空表示 libcamera 默认摄像头）。
-	if t != config.TypeTestSrc && t != config.TypeRpicam && strings.TrimSpace(in.Source) == "" {
+	// 宇树 A2 只在本机取帧（adapter 与机器人同机部署）：源必须留空。
+	if t == config.TypeUnitreeA2 && !stream.IsUnitreeLocal(in.Source) {
+		return badRequest("宇树 A2 无需配置源（adapter 与机器人同机运行，本机直采），请留空")
+	}
+	// testsrc 与 rpicam 的源可空（rpicam 空表示 libcamera 默认摄像头）；
+	// unitree_a2 留空表示本机直采。
+	if t != config.TypeTestSrc && t != config.TypeRpicam && t != config.TypeUnitreeA2 && strings.TrimSpace(in.Source) == "" {
 		return badRequest("取流源不能为空")
 	}
 	checkRange := func(name string, v, min, max int) error {
@@ -377,6 +382,7 @@ func (s *Server) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			Enabled: true,
 		}
 		applyInput(&created, &in)
+		applyTypeDefaults(&created)
 		root.Cameras = append(root.Cameras, created)
 		return nil
 	})
@@ -413,6 +419,7 @@ func (s *Server) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			root.Cameras[i].Type = config.CameraType(in.Type)
 			root.Cameras[i].Source = strings.TrimSpace(in.Source)
 			applyInput(&root.Cameras[i], &in)
+			applyTypeDefaults(&root.Cameras[i])
 			updated = root.Cameras[i]
 			return nil
 		}
@@ -451,6 +458,14 @@ func applyInput(cam *config.Camera, in *cameraInput) {
 	}
 	if in.Enabled != nil {
 		cam.Enabled = *in.Enabled
+	}
+}
+
+// applyTypeDefaults 类型级缺省值：几何已知的源在未显式配置分辨率时补齐，
+// 保证 ONVIF profile 声明与实际输出一致（自动档的通用默认 720p 会失真）。
+func applyTypeDefaults(cam *config.Camera) {
+	if cam.Type == config.TypeUnitreeA2 && cam.Width == 0 && cam.Height == 0 {
+		cam.Width, cam.Height = 1920, 1080 // A2 前摄固定几何（GetImageSample 实测）
 	}
 }
 
@@ -700,13 +715,13 @@ const (
 )
 
 type mosaicStatusResp struct {
-	Running       bool                     `json:"running"`
-	Restarts      int                      `json:"restarts"`
-	UptimeSeconds int64                    `json:"uptime_seconds"`
-	LastError     string                   `json:"last_error"`
-	StreamURL     string                   `json:"stream_url"`
+	Running       bool                      `json:"running"`
+	Restarts      int                       `json:"restarts"`
+	UptimeSeconds int64                     `json:"uptime_seconds"`
+	LastError     string                    `json:"last_error"`
+	StreamURL     string                    `json:"stream_url"`
 	Cells         []stream.MosaicCellStatus `json:"cells,omitempty"`
-	Pushes        []stream.MosaicPushInfo  `json:"pushes,omitempty"`
+	Pushes        []stream.MosaicPushInfo   `json:"pushes,omitempty"`
 }
 
 type mosaicResp struct {

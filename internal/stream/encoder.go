@@ -101,7 +101,7 @@ func videoEncodeArgs(encoder string, gov int, bitrateKbps int) []string {
 // 「配置即生效」。rtsp 源按源节奏转码、testsrc 自带节奏，均不强制。
 func fpsGuaranteeArgs(c config.Camera) []string {
 	switch c.Type {
-	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation:
+	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation, config.TypeUnitreeA2:
 		return []string{"-r", fmt.Sprintf("%d", c.FramerateOrDefault())}
 	}
 	return nil
@@ -116,7 +116,7 @@ func resolutionGuaranteeArgs(c config.Camera) []string {
 		return nil
 	}
 	switch c.Type {
-	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation:
+	case config.TypeV4L2, config.TypeDShow, config.TypeAVFoundation, config.TypeUnitreeA2:
 		return []string{"-vf", fmt.Sprintf("scale=%d:%d", c.Width, c.Height)}
 	}
 	return nil
